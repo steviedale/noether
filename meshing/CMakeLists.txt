@@ -34,7 +34,7 @@ target_link_libraries(meshing
 
 )
 
-#catkin_add_gtest(${PROJECT_NAME}-test test/utest.cpp)
-#if(TARGET ${PROJECT_NAME}-test)
-#    target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
-#endif()
+catkin_add_gtest(${PROJECT_NAME}-test test/utest.cpp)
+if(TARGET ${PROJECT_NAME}-test)
+    target_link_libraries(${PROJECT_NAME}-test ${PROJECT_NAME})
+endif()
