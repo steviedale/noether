@@ -23,6 +23,7 @@ namespace afront_meshing
   public:
     // expose protected function 'performUpsampling' from MLS
     pcl::PointNormal samplePoint(const pcl::PointXYZ& pt);
+    pcl::PointNormal samplePoint(const pcl::PointNormal& pt);
 
   private:
     pcl::PointCloud<pcl::PointXYZ> cloud_;
@@ -37,12 +38,12 @@ namespace afront_meshing
       typedef pcl::PointXYZ         VertexData;
       typedef int                   HalfEdgeData;
       typedef int                   EdgeData;
-      typedef pcl::Normal           FaceData;
+      typedef pcl::PointNormal      FaceData;
 
       typedef boost::false_type     IsManifold;
     };
 
-    typedef pcl::geometry::PolygonMesh <AfrontMeshing::MeshTraits> Mesh;
+    typedef pcl::geometry::PolygonMesh <pcl::geometry::DefaultMeshTraits< pcl::PointXYZ, int, int, pcl::PointNormal> > Mesh;
 
     typedef Mesh::VertexIndex   VertexIndex;
     typedef Mesh::HalfEdgeIndex HalfEdgeIndex;
@@ -51,6 +52,14 @@ namespace afront_meshing
     typedef Mesh::VertexIndices   VertexIndices;
     typedef Mesh::HalfEdgeIndices HalfEdgeIndices;
     typedef Mesh::FaceIndices     FaceIndices;
+
+    typedef Mesh::VertexAroundVertexCirculator           VAVC;
+    typedef Mesh::OutgoingHalfEdgeAroundVertexCirculator OHEAVC;
+    typedef Mesh::IncomingHalfEdgeAroundVertexCirculator IHEAVC;
+    typedef Mesh::FaceAroundVertexCirculator             FAVC;
+    typedef Mesh::VertexAroundFaceCirculator             VAFC;
+    typedef Mesh::InnerHalfEdgeAroundFaceCirculator      IHEAFC;
+    typedef Mesh::OuterHalfEdgeAroundFaceCirculator      OHEAFC;
 
   public:
      void setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
@@ -68,6 +77,52 @@ namespace afront_meshing
 
      void setRadius(double val){r_ = val;}
      double getRadius(){return r_;}
+
+     VertexIndex growEdge(const HalfEdgeIndex &half_edge);
+
+     MeshTraits::FaceData createFaceData(const pcl::PointXYZ p1, const pcl::PointXYZ p2, const pcl::PointXYZ p3);
+
+     // Some output functions
+     void printVertices (const Mesh& mesh)
+     {
+       std::cout << "Vertices:\n   ";
+       for (unsigned int i=0; i<mesh.sizeVertices (); ++i)
+       {
+         std::cout << mesh.getVertexDataCloud () [i] << " ";
+       }
+       std::cout << std::endl;
+     }
+
+     void printEdge (const Mesh& mesh, const HalfEdgeIndex& idx_he)
+     {
+       std::cout << "  "
+                 << mesh.getVertexDataCloud () [mesh.getOriginatingVertexIndex (idx_he).get ()]
+                 << " "
+                 << mesh.getVertexDataCloud () [mesh.getTerminatingVertexIndex (idx_he).get ()]
+                 << std::endl;
+     }
+
+     void printFace (const Mesh& mesh, const FaceIndex& idx_face)
+     {
+       // Circulate around all vertices in the face
+       VAFC       circ     = mesh.getVertexAroundFaceCirculator (idx_face);
+       const VAFC circ_end = circ;
+       std::cout << "  ";
+       do
+       {
+         std::cout << mesh.getVertexDataCloud () [circ.getTargetIndex ().get ()] << " ";
+       } while (++circ != circ_end);
+       std::cout << std::endl;
+     }
+
+     void printFaces (const Mesh& mesh)
+     {
+       std::cout << "Faces:\n";
+       for (unsigned int i=0; i<mesh.sizeFaces (); ++i)
+       {
+         printFace (mesh, FaceIndex (i));
+       }
+     }
 
   private:
 
@@ -94,7 +149,6 @@ namespace afront_meshing
      double rho_;
 
      double r_;
-
 
      Mesh mesh_; /**< The mesh object for inserting faces/vertices */
 

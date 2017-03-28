@@ -3,9 +3,9 @@ project(meshing)
 
 find_package(catkin REQUIRED cmake_modules)
 
-find_package(PCL 1.8 REQUIRED)
+find_package(PCL 1.7 REQUIRED)
 
-find_package(Eigen3 REQUIRED)
+find_package(Eigen REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include

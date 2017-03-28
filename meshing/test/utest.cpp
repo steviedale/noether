@@ -7,6 +7,7 @@
 #include <meshing/afront_meshing.h>
 #include <boost/thread/thread.hpp>
 #include <pcl/visualization/pcl_visualizer.h>
+#include <vtkMath.h>
 #include <gtest/gtest.h>
 
 // This test shows the results of meshing on a square grid that has a sinusoidal
@@ -40,7 +41,7 @@ TEST(AfrontTest, TestCase1)
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(cloud));
   std::cout << "number of cloud points: " << in_cloud->points.size() << "\n";
   mesher.setInputCloud(in_cloud);
-  mesher.setRho(0.05);
+  mesher.setRho(0.25);
   mesher.setRadius(1.0);
   pcl::PolygonMesh out_mesh;
 
@@ -50,7 +51,8 @@ TEST(AfrontTest, TestCase1)
     mesher.startMeshing();
 
     out_mesh = mesher.getMesh();
-    viewer->addPolygonMesh(out_mesh,"meshes",0);
+
+    viewer->addPolygonMesh(out_mesh);
   }
   else
   {
