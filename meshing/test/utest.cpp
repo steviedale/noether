@@ -18,6 +18,7 @@ TEST(AfrontTest, TestCase1)
 {
   pcl::PointCloud<pcl::PointXYZ> cloud;
   int gridSize = 50;
+  sleep(3);
 
   for(unsigned int x = 0; x < gridSize; x++)
   {
@@ -41,7 +42,7 @@ TEST(AfrontTest, TestCase1)
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(cloud));
   std::cout << "number of cloud points: " << in_cloud->points.size() << "\n";
   mesher.setInputCloud(in_cloud);
-  mesher.setRho(0.25);
+  mesher.setRho(0.125);
   mesher.setRadius(1.0);
   pcl::PolygonMesh out_mesh;
 
