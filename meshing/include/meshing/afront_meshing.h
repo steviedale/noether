@@ -14,6 +14,8 @@
 #include <pcl/geometry/polygon_mesh.h>
 #include <pcl/PolygonMesh.h>
 
+#include <deque>
+
 namespace afront_meshing
 {
   //template <typename PointInT, typename PointOutT> void
@@ -21,11 +23,18 @@ namespace afront_meshing
   class MLSSampling : public pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal>
   {
   public:
+
+    void process(pcl::PointCloud<pcl::PointNormal> &output);
+
     // expose protected function 'performUpsampling' from MLS
     pcl::PointNormal samplePoint(const pcl::PointXYZ& pt) const;
     pcl::PointNormal samplePoint(const pcl::PointNormal& pt) const;
 
   private:
+
+    Eigen::Vector2f calculateCurvature(const float &u, const float &v, const MLSResult &mls_result) const;
+    Eigen::Vector2f calculateCurvature(const int &index) const;
+
     pcl::PointCloud<pcl::PointXYZ> cloud_;
 
   };
@@ -33,8 +42,6 @@ namespace afront_meshing
 
   class AfrontMeshing
   {
-
-
     struct MeshTraits
     {
       typedef pcl::PointXYZ         VertexData;
@@ -45,7 +52,7 @@ namespace afront_meshing
       typedef boost::false_type     IsManifold;
     };
 
-    typedef pcl::geometry::PolygonMesh <pcl::geometry::DefaultMeshTraits< pcl::PointXYZ, int, int, pcl::PointNormal> > Mesh;
+    typedef pcl::geometry::PolygonMesh <MeshTraits > Mesh;
 
     typedef Mesh::VertexIndex   VertexIndex;
     typedef Mesh::HalfEdgeIndex HalfEdgeIndex;
@@ -63,14 +70,25 @@ namespace afront_meshing
     typedef Mesh::InnerHalfEdgeAroundFaceCirculator      IHEAFC;
     typedef Mesh::OuterHalfEdgeAroundFaceCirculator      OHEAFC;
 
+    struct GrowDistanceResults
+    {
+      double l;         /**< @brief Allowed grow distance perpendicular to half edge */
+      double estimated; /**< @brief The calculated edge length */
+      double ideal;     /**< @brief The ideal edge length */
+      double max_curv;  /**< @brief The maximum curvature found with search radius */
+      bool valid;       /**< @brief True if successful, otherwise false */
+    };
+
     struct PredictVertexResults
     {
-      HalfEdgeIndex he;   /**< @brief The half edge index from which to grow the triangle */
-      double l;           /**< @brief Allowed grow distance */
-      VertexIndices vi;   /**< @brief Stores triangle indicies */
-      pcl::PointXYZ p[3]; /**< @brief Stores the point information for the triangle */
-      pcl::PointXYZ mp;   /**< @brief The half edge mid point */
-      Eigen::Vector3d d;  /**< @brief The grow direction */
+      HalfEdgeIndex he;        /**< @brief The half edge index from which to grow the triangle */
+      GrowDistanceResults gdr; /**< @brief Allowed grow distance */
+      VertexIndices vi;        /**< @brief Stores triangle indicies */
+      pcl::PointXYZ p[3];      /**< @brief Stores the point information for the triangle */
+      pcl::PointNormal mp;     /**< @brief The half edge mid point */
+      pcl::PointNormal pv;     /**< @brief The predicted point projected on the mls surface */
+      Eigen::Vector3d d;       /**< @brief The grow direction */
+      Eigen::Vector2d k;       /**< @brief The principal curvature using the polynomial */
     };
 
     struct TriangleToCloseResults
@@ -81,85 +99,95 @@ namespace afront_meshing
       bool valid;                      /**< @brief True if not to close otherwise false */
     };
 
+    struct CanCutEarResult
+    {
+      HalfEdgeIndex first;  /**< @brief The fist half edge of the triangle */
+      HalfEdgeIndex second; /**< @brief The second half edge of the triangle */
+      VertexIndices vi;     /**< @brief The vertex indicies of the potential triangle */
+      double A;             /**< @brief The length for the first half edge */
+      double B;             /**< @brief The length for the second half edge */
+      double C;             /**< @brief The length for the remaining side of the triangle */
+      double a;             /**< @brief The angle BC */
+      double b;             /**< @brief The angle AC */
+      double c;             /**< @brief The anble AB */
+      double aspect_ratio;  /**< @brief The quality of the triangle (1.0 is the best) */
+      bool same_face;       /**< @brief Is the half edge's associated to the same face as he */
+      bool valid;           /**< @brief Whether the tianble meets the criteria */
+    };
+
+    struct CanCutEarResults
+    {
+      CanCutEarResults() {valid = nullptr;}
+
+      HalfEdgeIndex he;       /**< @brief The half edge index from which to grow the triangle */
+      CanCutEarResult prev;   /**< @brief The results using the previous half edge */
+      CanCutEarResult next;   /**< @brief The results using the next half edge */
+      CanCutEarResult *valid; /**< @brief The valid ear cutting option available */
+    };
+
   public:
+     /** @brief Set the input cloud to generate the mesh from. */
      void setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
      bool computeGuidanceField();
      void startMeshing();
+     void stepMesh();
 
-     pcl::PolygonMesh getMesh();
+     pcl::PolygonMesh getMesh() const;
 
-     /**
-      * @brief setRho The primary variable used to control mesh triangulation size
-      * @param val
-      */
+     pcl::PointCloud<pcl::Normal>::ConstPtr getNormals() const;
+
+     /** @brief Set the primary variable used to control mesh triangulation size */
      void setRho(double val){rho_ = val;}
+
+     /** @brief Get the primary variable used to control mesh triangulation size */
      double getRho() const {return rho_;}
 
+     /** @brief Set how fast can the mesh grow and shrink. (val > 1.0) */
+     void setTriangleQuality(double val) {reduction_ = val;}
+
+     /** @brief Get the variable that controls howw fast the mesh can grow and shrink. */
+     double getTriangleQuality() const {return reduction_;}
+
+     /** @brief Set the mls radius used for smoothing */
      void setRadius(double val){r_ = val;}
+
+     /** @brief Get the mls radius used for smoothing */
      double getRadius() const {return r_;}
 
-     VertexIndex createFirstTriangle(const double &x, const double &y, const double &z);
+     /** @brief Create the first triangle given a starting location. */
+     void createFirstTriangle(const double &x, const double &y, const double &z);
+
+     CanCutEarResults canCutEar(const HalfEdgeIndex &half_edge) const;
 
      PredictVertexResults predictVertex(const HalfEdgeIndex &half_edge) const;
 
-     TriangleToCloseResults isTriangleToClose(const PredictVertexResults &pvr) const;
+     TriangleToCloseResults isTriangleToClose(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const;
 
-     VertexIndex grow(const PredictVertexResults &pvr);
+     void grow(const CanCutEarResults &ccer, const PredictVertexResults &pvr);
 
      VertexIndex merge(const TriangleToCloseResults &tc);
 
-     /**
-      * @brief Perform an ear cut operation if possible
-      * @param half_edge1 Front half edge index
-      * @param half_edge2 Front half edge index
-      * @return True if a ear cutting operation was possible
-      */
-     bool cutEar(const HalfEdgeIndex &half_edge1, const HalfEdgeIndex &half_edge2);
+     /** @brief Perform an ear cut operation */
+     void cutEar(const CanCutEarResult &data);
 
-     // Some output functions
-     void printVertices (const Mesh& mesh)
-     {
-       std::cout << "Vertices:\n   ";
-       for (unsigned int i=0; i<mesh.sizeVertices (); ++i)
-       {
-         std::cout << mesh.getVertexDataCloud () [i] << " ";
-       }
-       std::cout << std::endl;
-     }
+     /** @brief Print all of the meshes vertices */
+     void printVertices() const;
 
-     void printEdge (const Mesh& mesh, const HalfEdgeIndex& idx_he)
-     {
-       std::cout << "  "
-                 << mesh.getVertexDataCloud () [mesh.getOriginatingVertexIndex (idx_he).get ()]
-                 << " "
-                 << mesh.getVertexDataCloud () [mesh.getTerminatingVertexIndex (idx_he).get ()]
-                 << std::endl;
-     }
+     /** @brief Print all of the meshes faces */
+     void printFaces() const;
 
-     void printFace (const Mesh& mesh, const FaceIndex& idx_face)
-     {
-       // Circulate around all vertices in the face
-       VAFC       circ     = mesh.getVertexAroundFaceCirculator (idx_face);
-       const VAFC circ_end = circ;
-       std::cout << "  ";
-       do
-       {
-         std::cout << mesh.getVertexDataCloud () [circ.getTargetIndex ().get ()] << " ";
-       } while (++circ != circ_end);
-       std::cout << std::endl;
-     }
+     /** @brief Print a given half edges vertices */
+     void printEdge(const HalfEdgeIndex &half_edge) const;
 
-     void printFaces (const Mesh& mesh)
-     {
-       std::cout << "Faces:\n";
-       for (unsigned int i=0; i<mesh.sizeFaces (); ++i)
-       {
-         printFace (mesh, FaceIndex (i));
-       }
-     }
+     /** @brief Print a given face's information */
+     void printFace(const FaceIndex &idx_face) const;
 
   private:
-     MeshTraits::FaceData createFaceData(const pcl::PointXYZ p1, const pcl::PointXYZ p2, const pcl::PointXYZ p3);
+     CanCutEarResult canCutEarHelper(const HalfEdgeIndex &half_edge1, const HalfEdgeIndex &half_edge2) const;
+
+
+     MeshTraits::FaceData createFaceData(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2, const pcl::PointXYZ &p3) const;
+     MeshTraits::FaceData createFaceData(const pcl::PointNormal &p1, const pcl::PointNormal &p2, const pcl::PointNormal &p3) const;
 
      /**
       * @brief Get the mid point of a half edge given it's verticies
@@ -167,7 +195,17 @@ namespace afront_meshing
       * @param p2 Vectex of half edge
       * @return The mid point of the half edge
       */
-     pcl::PointXYZ getMidPoint(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2) const;
+     pcl::PointNormal getMidPoint(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2) const;
+     pcl::PointNormal getMidPoint(const pcl::PointNormal &p1, const pcl::PointNormal &p2) const;
+
+     /**
+      * @brief Get the length of a half edge given it's verticies
+      * @param p1 Vertex of half edge
+      * @param p2 Vectex of half edge
+      * @return The lenght of the half edge
+      */
+     double getEdgeLength(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2) const;
+     double getEdgeLength(const pcl::PointNormal &p1, const pcl::PointNormal &p2) const;
 
      /**
       * @brief Get the dirction to grow for a given half edge
@@ -176,14 +214,17 @@ namespace afront_meshing
       * @param fd The face data associated to the opposing half edge
       * @return The grow direction vector
       */
-     Eigen::Vector3d getGrowDirection(const pcl::PointXYZ &p, const pcl::PointXYZ &mp, const MeshTraits::FaceData &fd) const;
+     Eigen::Vector3d getGrowDirection(const pcl::PointXYZ &p, const pcl::PointNormal &mp, const MeshTraits::FaceData &fd) const;
 
      /**
       * @brief Get the allowed grow distance
       * @param mp The mid point of the half edge
+      * @package edge_length The half edge length
+      * @param min_length The minium edge length attached to half edge
+      * @param max_length The maximum edge length attached to half edge
       * @return The allowed grow distance
       */
-     double getGrowDistance(const pcl::PointXYZ &mp) const;
+     GrowDistanceResults getGrowDistance(const pcl::PointNormal &mp, const double &edge_length, const double &min_length, const double &max_length) const;
 
      /**
       * @brief Get the predicted vertex for the new triangle
@@ -192,35 +233,51 @@ namespace afront_meshing
       * @param l The allowed grow distance
       * @return The predicted vertex.
       */
-     pcl::PointXYZ getPredictedVertex(const pcl::PointXYZ &mp, const Eigen::Vector3d &d, const double &l) const;
+     pcl::PointNormal getPredictedVertex(const pcl::PointNormal &mp, const Eigen::Vector3d &d, const double &l) const;
 
-     pcl::search::KdTree<pcl::PointXYZ>::Ptr input_cloud_tree_;
+     /**
+      * @brief Gets the Minimum and Maximum edge attached to half edge
+      * @param half_edge The half edge from which to grow the triangle
+      * @return [min, max] edge length
+      */
+     Eigen::Vector2d getMinMaxEdgeLength(const VertexIndex &v1, const VertexIndex &v2) const;
+
+     /** @brief This will calculate the max curvature at each point the mls surface. */
+     void createGuidanceField();
+
+     /** @brief Update the Kd Tree of the mesh vertices */
+     void updateKdTree();
+
+     /** @brief Get the next half edge connected to the provided half edge. */
+     HalfEdgeIndex getNextHalfEdge(const HalfEdgeIndex &half_edge) const {return mesh_.getNextHalfEdgeIndex(half_edge);}
+
+     /** @brief Get the previous half edge connected to the provided half edge. */
+     HalfEdgeIndex getPrevHalfEdge(const HalfEdgeIndex &half_edge) const {return mesh_.getPrevHalfEdgeIndex(half_edge);}
+
+     /** @brief Get the curvature provided an index. */
+     float getCurvature(const int &index) const;
+
+     /** @brief Find the maximum curvature given a set of indicies. */
+     float getMaxCurvature(const std::vector<int> &indices) const;
 
      pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud_;
-     pcl::PointCloud<pcl::PointNormal>::Ptr cloud_normals_;
+     pcl::search::KdTree<pcl::PointXYZ>::Ptr input_cloud_tree_;
 
      MLSSampling mls_;
-     /**
-      * @brief curvatures_ each point contains: principal_curvature[3], pc1, and pc2
-      * principal_curvature contains the eigenvector for the minimum eigen value
-      * pc1 = eigenvalues_ [2] * indices_size;
-      * pc2 = eigenvalues_ [1] * indices_size;
-      * curvature change calculation = eig_val_min/(sum(eig_vals))
-      * pc1 and pc2 are not necessarily the same as k1 and k2 (curvature typically found in literature)
-      */
-     pcl::PointCloud<pcl::PrincipalCurvatures>::Ptr curvatures_;
-
-     double getCurvature(const int index) const;
-
-     double getAverageCurvature(const std::vector<int> &indices) const;
+     pcl::PointCloud<pcl::PointNormal>::Ptr mls_cloud_;
+     pcl::search::KdTree<pcl::PointNormal>::Ptr mls_cloud_tree_;
 
      double rho_;
+
+     double reduction_;
 
      double r_;
 
      Mesh mesh_; /**< The mesh object for inserting faces/vertices */
      pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_;
      pcl::search::KdTree<MeshTraits::VertexData>::Ptr mesh_tree_;
+
+     std::deque<HalfEdgeIndex> queue_;
   };
 
 

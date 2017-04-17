@@ -1,6 +1,14 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(meshing)
 
+if(CMAKE_VERSION VERSION_LESS 3.1)
+    add_compile_options(-std=c++11)
+else()
+    set(CMAKE_CXX_STANDARD 11)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS ON)
+endif()
+
 find_package(catkin REQUIRED cmake_modules)
 
 find_package(PCL 1.7 REQUIRED)
