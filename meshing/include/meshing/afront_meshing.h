@@ -79,40 +79,54 @@ namespace afront_meshing
       bool valid;       /**< @brief True if successful, otherwise false */
     };
 
+    struct TriangleData
+    {
+      double A;             /**< @brief The length for the first half edge (p1->p2) */
+      double B;             /**< @brief The length for the second half edge (p2->p3) */
+      double C;             /**< @brief The length for the remaining side of the triangle (p3->p1) */
+      double a;             /**< @brief The angle BC */
+      double b;             /**< @brief The angle AC */
+      double c;             /**< @brief The anble AB */
+      double aspect_ratio;  /**< @brief The quality of the triangle (1.0 is the best) */
+      Eigen::Vector3f p[3];    /**< @brief Stores the point information for the triangle */
+    };
+
     struct PredictVertexResults
     {
       HalfEdgeIndex he;        /**< @brief The half edge index from which to grow the triangle */
       GrowDistanceResults gdr; /**< @brief Allowed grow distance */
+      TriangleData tri;        /**< @brief The proposed triangle data */
       VertexIndices vi;        /**< @brief Stores triangle indicies */
-      pcl::PointXYZ p[3];      /**< @brief Stores the point information for the triangle */
-      pcl::PointNormal mp;     /**< @brief The half edge mid point */
+      Eigen::Vector3f mp;      /**< @brief The half edge mid point */
       pcl::PointNormal pv;     /**< @brief The predicted point projected on the mls surface */
-      Eigen::Vector3d d;       /**< @brief The grow direction */
+      Eigen::Vector3f d;       /**< @brief The grow direction */
       Eigen::Vector2d k;       /**< @brief The principal curvature using the polynomial */
+    };
+
+    struct DistPointToHalfEdgeResults
+    {
+      double line;  /**< @brief The minimum distance to the line segment. */
+      double start; /**< @brief The distance to the line segment start point. */
+      double end;   /**< @brief The distance to the line segment end point. */
     };
 
     struct TriangleToCloseResults
     {
       PredictVertexResults pvr;        /**< @brief The predicted vertex information provided */
       VertexIndex closest;             /**< @brief The index of the closest point to the predicted vertex  */
-      double dist;                     /**< @brief The squared distance to the closest vertex */
+      DistPointToHalfEdgeResults dist; /**< @brief The distance to the line segment */
+      bool fence_violation;            /**< @brief Indicates if a half edge fence is violated. */
       bool valid;                      /**< @brief True if not to close otherwise false */
     };
 
     struct CanCutEarResult
     {
-      HalfEdgeIndex first;  /**< @brief The fist half edge of the triangle */
-      HalfEdgeIndex second; /**< @brief The second half edge of the triangle */
-      VertexIndices vi;     /**< @brief The vertex indicies of the potential triangle */
-      double A;             /**< @brief The length for the first half edge */
-      double B;             /**< @brief The length for the second half edge */
-      double C;             /**< @brief The length for the remaining side of the triangle */
-      double a;             /**< @brief The angle BC */
-      double b;             /**< @brief The angle AC */
-      double c;             /**< @brief The anble AB */
-      double aspect_ratio;  /**< @brief The quality of the triangle (1.0 is the best) */
-      bool same_face;       /**< @brief Is the half edge's associated to the same face as he */
-      bool valid;           /**< @brief Whether the tianble meets the criteria */
+      HalfEdgeIndex first;   /**< @brief The fist half edge of the triangle */
+      HalfEdgeIndex second;  /**< @brief The second half edge of the triangle */
+      VertexIndices vi;      /**< @brief The vertex indicies of the potential triangle */
+      TriangleData tri;      /**< @brief The Triangle information */
+      bool same_face;        /**< @brief Is the half edge's associated to the same face as he */
+      bool valid;            /**< @brief Whether the tianble meets the criteria */
     };
 
     struct CanCutEarResults
@@ -124,6 +138,8 @@ namespace afront_meshing
       CanCutEarResult next;   /**< @brief The results using the next half edge */
       CanCutEarResult *valid; /**< @brief The valid ear cutting option available */
     };
+
+
 
   public:
      /** @brief Set the input cloud to generate the mesh from. */
@@ -185,9 +201,7 @@ namespace afront_meshing
   private:
      CanCutEarResult canCutEarHelper(const HalfEdgeIndex &half_edge1, const HalfEdgeIndex &half_edge2) const;
 
-
-     MeshTraits::FaceData createFaceData(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2, const pcl::PointXYZ &p3) const;
-     MeshTraits::FaceData createFaceData(const pcl::PointNormal &p1, const pcl::PointNormal &p2, const pcl::PointNormal &p3) const;
+     MeshTraits::FaceData createFaceData(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3) const;
 
      /**
       * @brief Get the mid point of a half edge given it's verticies
@@ -195,8 +209,7 @@ namespace afront_meshing
       * @param p2 Vectex of half edge
       * @return The mid point of the half edge
       */
-     pcl::PointNormal getMidPoint(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2) const;
-     pcl::PointNormal getMidPoint(const pcl::PointNormal &p1, const pcl::PointNormal &p2) const;
+     Eigen::Vector3f getMidPoint(const Eigen::Vector3f &p1, const  Eigen::Vector3f &p2) const;
 
      /**
       * @brief Get the length of a half edge given it's verticies
@@ -204,8 +217,7 @@ namespace afront_meshing
       * @param p2 Vectex of half edge
       * @return The lenght of the half edge
       */
-     double getEdgeLength(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2) const;
-     double getEdgeLength(const pcl::PointNormal &p1, const pcl::PointNormal &p2) const;
+     double getEdgeLength(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2) const;
 
      /**
       * @brief Get the dirction to grow for a given half edge
@@ -214,7 +226,7 @@ namespace afront_meshing
       * @param fd The face data associated to the opposing half edge
       * @return The grow direction vector
       */
-     Eigen::Vector3d getGrowDirection(const pcl::PointXYZ &p, const pcl::PointNormal &mp, const MeshTraits::FaceData &fd) const;
+     Eigen::Vector3f getGrowDirection(const Eigen::Vector3f &p, const Eigen::Vector3f &mp, const MeshTraits::FaceData &fd) const;
 
      /**
       * @brief Get the allowed grow distance
@@ -224,7 +236,7 @@ namespace afront_meshing
       * @param max_length The maximum edge length attached to half edge
       * @return The allowed grow distance
       */
-     GrowDistanceResults getGrowDistance(const pcl::PointNormal &mp, const double &edge_length, const double &min_length, const double &max_length) const;
+     GrowDistanceResults getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length, const double &min_length, const double &max_length) const;
 
      /**
       * @brief Get the predicted vertex for the new triangle
@@ -233,7 +245,7 @@ namespace afront_meshing
       * @param l The allowed grow distance
       * @return The predicted vertex.
       */
-     pcl::PointNormal getPredictedVertex(const pcl::PointNormal &mp, const Eigen::Vector3d &d, const double &l) const;
+     pcl::PointNormal getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const;
 
      /**
       * @brief Gets the Minimum and Maximum edge attached to half edge
@@ -259,6 +271,26 @@ namespace afront_meshing
 
      /** @brief Find the maximum curvature given a set of indicies. */
      float getMaxCurvature(const std::vector<int> &indices) const;
+
+     /** @brief Calculate the distance between a point and a half edge. */
+     DistPointToHalfEdgeResults distPointToHalfEdge(const Eigen::Vector3f p, const HalfEdgeIndex &half_edge) const;
+
+     /**
+      * @brief Calculate triangle information.
+      * @param p1 First point of triangle
+      * @param p2 First point of triangle
+      * @param p3 First point of triangle
+      * @return Returns information about the triangle: angles, edge lengths, etc.
+      */
+     TriangleData getTriangleData(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const Eigen::Vector3f p3) const;
+     /**
+      * @brief Check if a line segment intersects a half edge fence.
+      * @param p1 Start point for line segment
+      * @param p2 End point for line segment
+      * @param half_edge Half edge for which to check for fence violation.
+      * @return False if the line segment intersects the half edge fence, otherwise True
+      */
+     bool checkFence(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const HalfEdgeIndex &half_edge) const;
 
      pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud_;
      pcl::search::KdTree<pcl::PointXYZ>::Ptr input_cloud_tree_;

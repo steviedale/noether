@@ -1,6 +1,7 @@
 #include <pcl/geometry/mesh_conversion.h>
 #include <pcl/conversions.h>
 #include <meshing/afront_meshing.h>
+#include <eigen3/Eigen/LU>
 
 //template class PCL_EXPORTS afront_meshing::MLSSampling<pcl::PointXYZ, pcl::PointNormal>;
 namespace afront_meshing
@@ -220,38 +221,39 @@ namespace afront_meshing
     middle_pt.z = z;
     mls_cloud_tree_->nearestKSearch(middle_pt, 1, K, K_dist);
 
-    pcl::PointNormal p1 = mls_.samplePoint(mls_cloud_->points[K[0]]);
+    pcl::PointNormal sp = mls_.samplePoint(mls_cloud_->points[K[0]]);
+    Eigen::Vector3f p1 = sp.getVector3fMap();
 
     // Get the allowed grow distance
-    double d = 2 * std::sin(rho_/2) / p1.curvature;
+    double d = 2 * std::sin(rho_/2) / sp.curvature;
     GrowDistanceResults gdr = getGrowDistance(p1, d, d, d);
 
     // search for the nearest neighbor
-    mls_cloud_tree_->nearestKSearch(p1, 2, K, K_dist);
+    mls_cloud_tree_->nearestKSearch(sp, 2, K, K_dist);
 
     // use l1 and nearest neighbor to extend edge
-    pcl::PointNormal mp, dp, p2, p3;;
-    Eigen::Vector3d v1, v2, norm;
+    pcl::PointNormal dp;
+    Eigen::Vector3f p2, p3, v1, v2, mp, norm;
 
     dp = mls_cloud_->points[K[1]];
-    v1 << (dp.x - p1.x), (dp.y - p1.y), (dp.z - p1.z);
+    v1 = dp.getVector3fMap() - p1;
     v1 = v1.normalized();
-    norm << dp.normal_x, dp.normal_y, dp.normal_z;
+    norm = dp.getNormalVector3fMap();
 
-    p2 = getPredictedVertex(p1, v1, gdr.l);
+    p2 = getPredictedVertex(p1, v1, gdr.l).getVector3fMap();
     mp = getMidPoint(p1, p2);
     d = getEdgeLength(p1, p2);
 
     v2 = norm.cross(v1).normalized();
 
     gdr = getGrowDistance(mp, d, d, d);
-    p3 = getPredictedVertex(mp, v2, gdr.l);
+    p3 = getPredictedVertex(mp, v2, gdr.l).getVector3fMap();
 
     MeshTraits::FaceData fd = createFaceData(p1, p2, p3);
     VertexIndices vi;
-    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p1.x, p1.y, p1.z)));
-    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p2.x, p2.y, p2.z)));
-    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p3.x, p3.y, p3.z)));
+    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p1(0), p1(1), p1(2))));
+    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p2(0), p2(1), p2(2))));
+    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p3(0), p3(1), p3(2))));
     mesh_.addFace(vi[0], vi[1], vi[2], fd);
   }
 
@@ -263,7 +265,7 @@ namespace afront_meshing
     result.prev = canCutEarHelper(getPrevHalfEdge(half_edge), half_edge);
 
     if (result.next.valid && result.prev.valid)
-      if (result.next.aspect_ratio < result.prev.aspect_ratio)
+      if (result.next.tri.aspect_ratio < result.prev.tri.aspect_ratio)
         result.valid = &result.next;
       else
         result.valid = &result.prev;
@@ -278,9 +280,7 @@ namespace afront_meshing
   AfrontMeshing::CanCutEarResult AfrontMeshing::canCutEarHelper(const HalfEdgeIndex &half_edge1, const HalfEdgeIndex &half_edge2) const
   {
     CanCutEarResult result;
-    pcl::PointXYZ p1, p2, p3;
-    Eigen::Vector3d v1, v2, v3, cross;
-    double dot, sina, cosa, bottom;
+    Eigen::Vector3f p1, p2, p3;
 
     result.first = half_edge1;
     result.second = half_edge2;
@@ -297,40 +297,12 @@ namespace afront_meshing
     result.vi.push_back(mesh_.getOriginatingVertexIndex(result.first));
     result.vi.push_back(mesh_.getTerminatingVertexIndex(result.first));
     result.vi.push_back(mesh_.getTerminatingVertexIndex(result.second));
-    p1 = mesh_.getVertexDataCloud()[result.vi[0].get()];
-    p2 = mesh_.getVertexDataCloud()[result.vi[1].get()];
-    p3 = mesh_.getVertexDataCloud()[result.vi[2].get()];
+    p1 = (mesh_.getVertexDataCloud()[result.vi[0].get()]).getVector3fMap();
+    p2 = (mesh_.getVertexDataCloud()[result.vi[1].get()]).getVector3fMap();
+    p3 = (mesh_.getVertexDataCloud()[result.vi[2].get()]).getVector3fMap();
 
-    v1 << (p1.x - p2.x), (p1.y - p2.y), (p1.z - p2.z);
-    v2 << (p3.x - p2.x), (p3.y - p2.y), (p3.z - p2.z);
-    v3 << (p1.x - p3.x), (p1.y - p3.y), (p1.z - p3.z);
-
-    result.A = v1.norm();
-    result.B = v2.norm();
-    result.C = v3.norm();
-
-    result.aspect_ratio = std::max(std::max(result.A, result.B), result.C)/std::min(std::min(result.A, result.B), result.C);
-
-    // Check first angle of triangle
-    dot = v1.dot(v2);
-    cross = v1.cross(v2);
-    bottom = v1.norm() * v2.norm();
-    sina = cross.norm()/bottom;
-    cosa = dot/bottom;
-    result.c = atan2(sina, cosa);
-
-    // Check second angle of triangle
-    v2 *= -1.0;
-    dot = v2.dot(v3);
-    cross = v2.cross(v3);
-    bottom = v2.norm() * v3.norm();
-    sina = cross.norm()/bottom;
-    cosa = dot/bottom;
-    result.a = atan2(sina, cosa);
-
-    result.b = M_PI - result.a - result.c;
-
-    if (result.a < 1.22173 && result.b < 1.22173 && result.c < 1.22173)
+    result.tri = getTriangleData(p1, p2, p3);
+    if (result.tri.a < 1.22173 && result.tri.b < 1.22173 && result.tri.c < 1.22173)
       result.valid = true;
 
     return result;
@@ -340,7 +312,10 @@ namespace afront_meshing
   {
     // Add new face
     std::cout << "Ear Cut" << std::endl;
-    MeshTraits::FaceData new_fd = createFaceData(mesh_.getVertexDataCloud()[data.vi[0].get()], mesh_.getVertexDataCloud()[data.vi[1].get()], mesh_.getVertexDataCloud()[data.vi[2].get()]);
+    MeshTraits::FaceData new_fd = createFaceData((mesh_.getVertexDataCloud()[data.vi[0].get()]).getVector3fMap(),
+                                                 (mesh_.getVertexDataCloud()[data.vi[1].get()]).getVector3fMap(),
+                                                 (mesh_.getVertexDataCloud()[data.vi[2].get()]).getVector3fMap());
+
     mesh_.addFace(data.vi[0], data.vi[1], data.vi[2], new_fd);
 
     queue_.push_back(getNextHalfEdge(getPrevHalfEdge(data.first)));
@@ -351,6 +326,7 @@ namespace afront_meshing
   {
     // Local Variables
     PredictVertexResults result;
+    Eigen::Vector3f p1, p2;
 
     // Get Afront FaceData
     result.he = half_edge;
@@ -360,29 +336,29 @@ namespace afront_meshing
     // Get Half Edge Vertexs
     result.vi.push_back(mesh_.getOriginatingVertexIndex(half_edge));
     result.vi.push_back(mesh_.getTerminatingVertexIndex(half_edge));
-    result.p[0] = mesh_.getVertexDataCloud()[result.vi[0].get()];
-    result.p[1] = mesh_.getVertexDataCloud()[result.vi[1].get()];
+    p1 = (mesh_.getVertexDataCloud()[result.vi[0].get()]).getVector3fMap();
+    p2 = (mesh_.getVertexDataCloud()[result.vi[1].get()]).getVector3fMap();
 
     // Calculate min max of all lengths attached to half edge
     Eigen::Vector2d mm = getMinMaxEdgeLength(result.vi[0], result.vi[1]);
 
     // find the mid point of the edge
-    result.mp = getMidPoint(result.p[0], result.p[1]);
+    result.mp = getMidPoint(p1, p2);
 
     // Calculate the edge length
-    double l = getEdgeLength(result.p[0], result.p[1]);
+    double l = getEdgeLength(p1, p2);
 
     // Calculate direction vector to move
-    result.d = getGrowDirection(result.p[0], result.mp, fd);
+    result.d = getGrowDirection(p1, result.mp, fd);
 
     // Get the allowed grow distance
     result.gdr = getGrowDistance(result.mp, l, mm[0], mm[1]);
 
-    // Return predicted vertex
+    // Get predicted vertex
     result.pv = getPredictedVertex(result.mp, result.d, result.gdr.l);
-    result.p[2].x = result.pv.x;
-    result.p[2].y = result.pv.y;
-    result.p[2].z = result.pv.z;
+
+    // Get triangle Data
+    result.tri = getTriangleData(p1, p2, result.pv.getVector3fMap());
 
     return result;
   }
@@ -394,8 +370,45 @@ namespace afront_meshing
       std::vector<float> K_dist;
 
       // search for the nearest neighbor
-      pcl::PointXYZ search_pt(pvr.p[2]);
+      pcl::PointXYZ search_pt(pvr.tri.p[2](0), pvr.tri.p[2](1), pvr.tri.p[2](2));
       mesh_tree_->radiusSearch(search_pt, 3.0 * pvr.gdr.ideal, K, K_dist);
+
+      result.valid = true;
+      result.fence_violation = false;
+      for( auto i = 0; i < K.size(); ++i)
+      {
+        MeshTraits::VertexData &data = mesh_vertex_data_->at(K[i]);
+        VertexIndex vi = mesh_.getVertexIndex(data);
+
+        OHEAVC       circ_oheav     = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(vi);
+        const OHEAVC circ_oheav_end = circ_oheav;
+
+        do
+        {
+          HalfEdgeIndex he = circ_oheav.getTargetIndex();
+          if (mesh_.isBoundary(he) && (he != pvr.he))
+          {
+            result.fence_violation = !checkFence(pvr.tri.p[0], pvr.tri.p[2], he);
+
+            result.dist = distPointToHalfEdge(pvr.tri.p[2], he);
+            if (result.dist.line < pvr.gdr.l * 0.5 || result.fence_violation )
+            {
+              result.valid = false;
+              if (result.dist.start < result.dist.end)
+                result.closest = mesh_.getOriginatingVertexIndex(he);
+              else
+                result.closest = mesh_.getTerminatingVertexIndex(he);
+
+              if (result.fence_violation)
+                break;
+            }
+          }
+        } while (++circ_oheav != circ_oheav_end);
+
+        if (result.fence_violation)
+          break;
+      }
+
 
       // Next need to loop through each vertice and find the half edges then check for fence violations and distance to edge
 
@@ -404,7 +417,7 @@ namespace afront_meshing
 
 
 
-//    TriangleToCloseResults result;
+//    TriangleToCloseRconst OHEAVC circ_oheav_end = circ_oheav;esults result;
 //    std::vector<int> K;
 //    std::vector<float> K_dist;
 
@@ -421,15 +434,80 @@ namespace afront_meshing
 //    if (result.dist < pow(pvr.l * 0.5, 2))
 //      result.valid = false;
 
-//    return result;
+    result.valid = true;
+    return result;
 
+  }
+
+  AfrontMeshing::DistPointToHalfEdgeResults AfrontMeshing::distPointToHalfEdge(const Eigen::Vector3f p, const HalfEdgeIndex &half_edge) const
+  {
+    DistPointToHalfEdgeResults results;
+    Eigen::Vector3f p1, p2;
+    p1 = (mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
+    p2 = (mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
+    Eigen::Vector3f v = p2 - p1;
+    Eigen::Vector3f w = p - p1;
+
+    double c1 = w.dot(v);
+    double c2 = v.dot(v);
+    results.start = getEdgeLength(p, p1);
+    results.end = getEdgeLength(p, p2);
+
+    if (c1 <= 0)
+    {
+      results.line = results.start;
+    }
+    else if (c2 <= c1)
+    {
+      results.line = results.end;
+    }
+    else
+    {
+      double b = c1 / c2;
+      Eigen::Vector3f pb = p1 + b * v;
+      results.line = getEdgeLength(p, pb);
+    }
+
+    return results;
+  }
+
+  bool AfrontMeshing::checkFence(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const HalfEdgeIndex &half_edge) const
+  {
+    // Define parametric equation of fence plane
+    Eigen::Vector3f he_p1, he_p2;
+    he_p1 = (mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
+    he_p2 = (mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
+    printEdge(half_edge);
+    MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(half_edge).get()];
+
+    Eigen::Vector3f u = he_p2 - he_p1;
+    Eigen::Vector3f v = fd.getNormalVector3fMap();
+    v = v.normalized() * rho_;
+
+    // Define parametric equation of line segment
+    Eigen::Vector3f w = p2 - p1;
+
+    Eigen::Matrix3f m;
+    m << u, v, -w;
+
+    Eigen::Vector3f x = p1 - he_p1;
+    Eigen::Vector3f result = m.lu().solve(x);
+
+    if (result(2) <= 1 && result(2) >= 0) // This checks if line segement intersects the plane
+      if (result(0) <= 1 && result(0) >= 0) // This checks if intersection point is within the x range of the plane
+        if (result(1) <= 1 && result(1) >= -1) // This checks if intersection point is within the y range of the plane
+          return false;
+
+
+    return true;
   }
 
   void AfrontMeshing::grow(const CanCutEarResults &ccer, const PredictVertexResults &pvr)
   {
     // Add new face
-    MeshTraits::FaceData new_fd = createFaceData(pvr.p[0], pvr.p[1], pvr.p[2]);
-    mesh_.addFace(pvr.vi[0], pvr.vi[1], mesh_.addVertex(pvr.p[2]), new_fd);
+    MeshTraits::FaceData new_fd = createFaceData(pvr.tri.p[0], pvr.tri.p[1], pvr.tri.p[2]);
+    pcl::PointXYZ np(pvr.tri.p[2](0), pvr.tri.p[2](1), pvr.tri.p[2](2));
+    mesh_.addFace(pvr.vi[0], pvr.vi[1], mesh_.addVertex(np), new_fd);
     mesh_tree_->setInputCloud(mesh_vertex_data_); // This may need to be replaced with using an octree.
 
     // Add new half edges to the queue
@@ -439,7 +517,7 @@ namespace afront_meshing
 
   AfrontMeshing::VertexIndex AfrontMeshing::merge(const TriangleToCloseResults &tc)
   {
-    MeshTraits::FaceData new_fd = createFaceData(tc.pvr.p[0], tc.pvr.p[1], mesh_.getVertexDataCloud()[tc.closest.get()]);
+    MeshTraits::FaceData new_fd = createFaceData(tc.pvr.tri.p[0], tc.pvr.tri.p[1], (mesh_.getVertexDataCloud()[tc.closest.get()]).getVector3fMap());
     mesh_.addFace(tc.pvr.vi[0], tc.pvr.vi[1], tc.closest, new_fd);
     mesh_tree_->setInputCloud(mesh_vertex_data_); // This may need to be replaced with using an octree.
     return tc.closest;
@@ -453,62 +531,42 @@ namespace afront_meshing
     return mls_cloud_->at(index).curvature;
   }
 
-  pcl::PointNormal AfrontMeshing::getMidPoint(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2) const
+  Eigen::Vector3f AfrontMeshing::getMidPoint(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2) const
   {
-    pcl::PointNormal p;
-    p.x = (p1.x + p2.x)/2.0;
-    p.y = (p1.y + p2.y)/2.0;
-    p.z = (p1.z + p2.z)/2.0;
-    return p;
+    return (p1 + p2) / 2.0;
   }
 
-  pcl::PointNormal AfrontMeshing::getMidPoint(const pcl::PointNormal &p1, const pcl::PointNormal &p2) const
+  double AfrontMeshing::getEdgeLength(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2) const
   {
-    pcl::PointNormal p;
-    p.x = (p1.x + p2.x)/2.0;
-    p.y = (p1.y + p2.y)/2.0;
-    p.z = (p1.z + p2.z)/2.0;
-    return p;
+    return (p2-p1).norm();
   }
 
-  double AfrontMeshing::getEdgeLength(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2) const
+  Eigen::Vector3f AfrontMeshing::getGrowDirection(const Eigen::Vector3f &p, const Eigen::Vector3f &mp, const MeshTraits::FaceData &fd) const
   {
-    double dx2 = pow(p2.x - p1.x, 2);
-    double dy2 = pow(p2.y - p1.y, 2);
-    double dz2 = pow(p2.z - p1.z, 2);
-    return std::sqrt(dx2 + dy2 + dz2);
-  }
-
-  double AfrontMeshing::getEdgeLength(const pcl::PointNormal &p1, const pcl::PointNormal &p2) const
-  {
-    double dx2 = pow(p2.x - p1.x, 2);
-    double dy2 = pow(p2.y - p1.y, 2);
-    double dz2 = pow(p2.z - p1.z, 2);
-    return std::sqrt(dx2 + dy2 + dz2);
-  }
-
-  Eigen::Vector3d AfrontMeshing::getGrowDirection(const pcl::PointXYZ &p, const pcl::PointNormal &mp, const MeshTraits::FaceData &fd) const
-  {
-    Eigen::Vector3d v1, v2, v3, norm;
-    v1 << (mp.x - p.x), (mp.y - p.y), (mp.z - p.z);
-    norm << fd.normal_x, fd.normal_y, fd.normal_z;
+    Eigen::Vector3f v1, v2, v3, norm;
+    v1 = mp - p;
+    norm = fd.getNormalVector3fMap();
     v2 = norm.cross(v1).normalized();
 
     // Check direction from origin of triangle
-    v3 << (fd.x - mp.x), (fd.y - mp.y), (fd.z - mp.z);
+    v3 = fd.getVector3fMap() - mp;
     if (v2.dot(v3) > 0.0)
       v2 *= -1.0;
 
     return v2;
   }
 
-  AfrontMeshing::GrowDistanceResults AfrontMeshing::getGrowDistance(const pcl::PointNormal &mp, const double &edge_length, const double &min_length, const double &max_length) const
+  AfrontMeshing::GrowDistanceResults AfrontMeshing::getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length, const double &min_length, const double &max_length) const
   {
     GrowDistanceResults gdr;
     std::vector<int> K;
     std::vector<float> K_dist;
 
-    int cnt = mls_cloud_tree_->radiusSearch(mp, reduction_ * max_length, K, K_dist);
+    pcl::PointNormal pn;
+    pn.x = mp(0);
+    pn.y = mp(1);
+    pn.z = mp(2);
+    int cnt = mls_cloud_tree_->radiusSearch(pn, reduction_ * max_length, K, K_dist);
     gdr.valid = false;
     gdr.max_curv = getMaxCurvature(K);
     if (cnt > 0)
@@ -566,15 +624,12 @@ namespace afront_meshing
     return gdr;
   }
 
-  pcl::PointNormal AfrontMeshing::getPredictedVertex(const pcl::PointNormal &mp, const Eigen::Vector3d &d, const double &l) const
+  pcl::PointNormal AfrontMeshing::getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const
   {
-    pcl::PointXYZ p;
-    p.x = mp.x + l * d(0);
-    p.y = mp.y + l * d(1);
-    p.z = mp.z + l * d(2);
+    Eigen::Vector3f p = mp + l * d;
 
     // Project new point onto the mls surface
-    return mls_.samplePoint(p);
+    return mls_.samplePoint(pcl::PointXYZ(p(0), p(1), p(2)));
   }
 
   float AfrontMeshing::getMaxCurvature(const std::vector<int>& indices) const
@@ -605,7 +660,7 @@ namespace afront_meshing
         pcl::PointXYZ p1, p2;
         p1 = mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(he).get()];
         p2 = mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(he).get()];
-        double d = getEdgeLength(p1, p2);
+        double d = getEdgeLength(p1.getVector3fMap(), p2.getVector3fMap());
         if (d > result[1])
           result[1] = d;
 
@@ -623,7 +678,7 @@ namespace afront_meshing
         pcl::PointXYZ p1, p2;
         p1 = mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(he).get()];
         p2 = mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(he).get()];
-        double d = getEdgeLength(p1, p2);
+        double d = getEdgeLength(p1.getVector3fMap(), p2.getVector3fMap());
         if (d > result[1])
           result[1] = d;
 
@@ -635,38 +690,62 @@ namespace afront_meshing
     return result;
   }
 
-
-  AfrontMeshing::MeshTraits::FaceData AfrontMeshing::createFaceData(const pcl::PointXYZ &p1, const pcl::PointXYZ &p2, const pcl::PointXYZ &p3) const
+  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const Eigen::Vector3f p3) const
   {
-    MeshTraits::FaceData center_pt;
-    Eigen::Vector3d v1, v2, norm;
-    center_pt.x = (p1.x + p2.x + p3.x)/3.0;
-    center_pt.y = (p1.y + p2.y + p3.y)/3.0;
-    center_pt.z = (p1.z + p2.z + p3.z)/3.0;
+    TriangleData result;
+    Eigen::Vector3f v1, v2, v3, cross;
+    double dot, sina, cosa, bottom;
 
-    v1 << (p2.x - p1.x), (p2.y - p1.y), (p2.z - p1.z);
-    v2 << (center_pt.x - p1.x), (center_pt.y - p1.y), (center_pt.z - p1.z);
-    norm = v2.cross(v1).normalized();
+    v1 = p1 - p2;
+    v2 = p3 - p2;
+    v3 = p1 - p3;
 
-    center_pt.normal_x = norm(0);
-    center_pt.normal_y = norm(1);
-    center_pt.normal_z = norm(2);
+    result.A = v1.norm();
+    result.B = v2.norm();
+    result.C = v3.norm();
 
-    return center_pt;
+    result.aspect_ratio = std::max(std::max(result.A, result.B), result.C)/std::min(std::min(result.A, result.B), result.C);
+
+    // Check first angle of triangle
+    dot = v1.dot(v2);
+    cross = v1.cross(v2);
+    bottom = v1.norm() * v2.norm();
+    sina = cross.norm()/bottom;
+    cosa = dot/bottom;
+    result.c = atan2(sina, cosa);
+
+    // Check second angle of triangle
+    v2 *= -1.0;
+    dot = v2.dot(v3);
+    cross = v2.cross(v3);
+    bottom = v2.norm() * v3.norm();
+    sina = cross.norm()/bottom;
+    cosa = dot/bottom;
+    result.a = atan2(sina, cosa);
+
+    result.b = M_PI - result.a - result.c;
+
+    // Store point information
+    result.p[0] = p1;
+    result.p[1] = p2;
+    result.p[2] = p3;
+
+    return result;
   }
 
-  AfrontMeshing::MeshTraits::FaceData AfrontMeshing::createFaceData(const pcl::PointNormal &p1, const pcl::PointNormal &p2, const pcl::PointNormal &p3) const
+  AfrontMeshing::MeshTraits::FaceData AfrontMeshing::createFaceData(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3) const
   {
     MeshTraits::FaceData center_pt;
-    Eigen::Vector3d v1, v2, norm;
-    center_pt.x = (p1.x + p2.x + p3.x)/3.0;
-    center_pt.y = (p1.y + p2.y + p3.y)/3.0;
-    center_pt.z = (p1.z + p2.z + p3.z)/3.0;
+    Eigen::Vector3f cp, v1, v2, norm;
 
-    v1 << (p2.x - p1.x), (p2.y - p1.y), (p2.z - p1.z);
-    v2 << (center_pt.x - p1.x), (center_pt.y - p1.y), (center_pt.z - p1.z);
+    cp = (p1 + p2 + p3) / 3.0;
+    v1 = p2 - p1;
+    v2  = cp - p1;
     norm = v2.cross(v1).normalized();
 
+    center_pt.x = cp(0);
+    center_pt.y = cp(1);
+    center_pt.z = cp(2);
     center_pt.normal_x = norm(0);
     center_pt.normal_y = norm(1);
     center_pt.normal_z = norm(2);
