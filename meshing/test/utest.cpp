@@ -37,6 +37,7 @@ TEST(AfrontTest, TestCase1)
   boost::shared_ptr<afront_meshing::AfrontMeshing> mesher(new afront_meshing::AfrontMeshing);
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(cloud));
   std::cout << "number of cloud points: " << in_cloud->points.size() << "\n";
+  mesher->setViewer(viewer);
   mesher->setInputCloud(in_cloud);
   mesher->setRho(0.125);
   mesher->setTriangleQuality(1.2);

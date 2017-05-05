@@ -14,6 +14,8 @@
 #include <pcl/geometry/polygon_mesh.h>
 #include <pcl/PolygonMesh.h>
 
+#include <pcl/visualization/pcl_visualizer.h>
+
 #include <deque>
 
 namespace afront_meshing
@@ -88,7 +90,19 @@ namespace afront_meshing
       double b;             /**< @brief The angle AC */
       double c;             /**< @brief The anble AB */
       double aspect_ratio;  /**< @brief The quality of the triangle (1.0 is the best) */
-      Eigen::Vector3f p[3];    /**< @brief Stores the point information for the triangle */
+      Eigen::Vector3f p[3]; /**< @brief Stores the point information for the triangle */
+
+      void print(const std::string description = "") const
+      {
+        if (description == "")
+          std::printf("Triangle Data:\n");
+        else
+          std::printf("Triangle Data (%s):\n", description.c_str());
+
+        std::printf("\t A: %-10.4f B: %-10.4f C: %-10.4f\n", A, B, C);
+        std::printf("\t a: %-10.4f b: %-10.4f c: %-10.4f\n", a, b, c);
+        std::printf("\t Aspect Ratio: %-10.4f\n", aspect_ratio);
+      }
     };
 
     struct PredictVertexResults
@@ -105,28 +119,20 @@ namespace afront_meshing
 
     struct DistPointToHalfEdgeResults
     {
-      double line;  /**< @brief The minimum distance to the line segment. */
-      double start; /**< @brief The distance to the line segment start point. */
-      double end;   /**< @brief The distance to the line segment end point. */
-    };
-
-    struct TriangleToCloseResults
-    {
-      PredictVertexResults pvr;        /**< @brief The predicted vertex information provided */
-      VertexIndex closest;             /**< @brief The index of the closest point to the predicted vertex  */
-      DistPointToHalfEdgeResults dist; /**< @brief The distance to the line segment */
-      bool fence_violation;            /**< @brief Indicates if a half edge fence is violated. */
-      bool valid;                      /**< @brief True if not to close otherwise false */
+      HalfEdgeIndex he; /**< @brief The half edge index to check distance against. */
+      double line;      /**< @brief The minimum distance to the line segment. */
+      double start;     /**< @brief The distance to the line segment start point. */
+      double end;       /**< @brief The distance to the line segment end point. */
     };
 
     struct CanCutEarResult
     {
-      HalfEdgeIndex first;   /**< @brief The fist half edge of the triangle */
-      HalfEdgeIndex second;  /**< @brief The second half edge of the triangle */
-      VertexIndices vi;      /**< @brief The vertex indicies of the potential triangle */
-      TriangleData tri;      /**< @brief The Triangle information */
-      bool same_face;        /**< @brief Is the half edge's associated to the same face as he */
-      bool valid;            /**< @brief Whether the tianble meets the criteria */
+      HalfEdgeIndex primary;   /**< @brief The advancing front half edge */
+      HalfEdgeIndex secondary; /**< @brief The Secondary half edge triangle (Previouse or Next) */
+      VertexIndices vi;        /**< @brief The vertex indicies of the potential triangle */
+      TriangleData tri;        /**< @brief The Triangle information */
+      bool same_face;          /**< @brief Is the half edge's associated to the same face as he */
+      bool valid;              /**< @brief Whether the tianble meets the criteria */
     };
 
     struct CanCutEarResults
@@ -139,12 +145,34 @@ namespace afront_meshing
       CanCutEarResult *valid; /**< @brief The valid ear cutting option available */
     };
 
+    enum TriangleToCloseTypes
+    {
+      None = 0,             /**< @brief There is no violation */
+      NeighborHalfEdge = 1, /**< @brief The new trianble interfereces with either the next or previous half edge. */
+      FenceViolation = 2,   /**< @brief The new triangle violates another half edges fence. */
+      CloseProximity = 3,   /**< @brief The new triangle is in close proximity to another half edge. */
+    };
 
+    struct TriangleToCloseResults
+    {
+      TriangleToCloseResults() {data = nullptr;}
+      ~TriangleToCloseResults()
+      {
+        if (type == TriangleToCloseTypes::CloseProximity || type == TriangleToCloseTypes::FenceViolation)
+          delete static_cast<DistPointToHalfEdgeResults*>(data);
+      }
+
+      TriangleToCloseTypes type;       /**< @brief The type of violation. */
+      PredictVertexResults pvr;        /**< @brief The predicted vertex information provided */
+      CanCutEarResults ccer;           /**< @brief The can cut ear results */
+      void *data;                      /**< @brief This stores the data associated to the violation. */
+    };
 
   public:
      /** @brief Set the input cloud to generate the mesh from. */
      void setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
      bool computeGuidanceField();
+     void setViewer(boost::shared_ptr<pcl::visualization::PCLVisualizer> &viewer) {viewer_ = viewer;}
      void startMeshing();
      void stepMesh();
 
@@ -181,7 +209,8 @@ namespace afront_meshing
 
      void grow(const CanCutEarResults &ccer, const PredictVertexResults &pvr);
 
-     VertexIndex merge(const TriangleToCloseResults &tc);
+     void topologyEvent(const TriangleToCloseResults &ttcr);
+//     VertexIndex merge(const TriangleToCloseResults &tc);
 
      /** @brief Perform an ear cut operation */
      void cutEar(const CanCutEarResult &data);
@@ -198,8 +227,10 @@ namespace afront_meshing
      /** @brief Print a given face's information */
      void printFace(const FaceIndex &idx_face) const;
 
+     /** @brief Convert Eigen Vector3f to PCL PointXYZ */
+     pcl::PointXYZ convertEigenToPCL(const Eigen::Vector3f &p) const;
+
   private:
-     CanCutEarResult canCutEarHelper(const HalfEdgeIndex &half_edge1, const HalfEdgeIndex &half_edge2) const;
 
      MeshTraits::FaceData createFaceData(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3) const;
 
@@ -283,6 +314,7 @@ namespace afront_meshing
       * @return Returns information about the triangle: angles, edge lengths, etc.
       */
      TriangleData getTriangleData(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const Eigen::Vector3f p3) const;
+
      /**
       * @brief Check if a line segment intersects a half edge fence.
       * @param p1 Start point for line segment
@@ -310,6 +342,9 @@ namespace afront_meshing
      pcl::search::KdTree<MeshTraits::VertexData>::Ptr mesh_tree_;
 
      std::deque<HalfEdgeIndex> queue_;
+
+     std::uint64_t counter_;
+     boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer_;
   };
 
 
