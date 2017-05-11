@@ -7,6 +7,7 @@
 #include <meshing/afront_meshing.h>
 #include <boost/thread/thread.hpp>
 #include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/io/pcd_io.h>
 #include <vtkMath.h>
 #include <gtest/gtest.h>
 
@@ -20,61 +21,72 @@ TEST(AfrontTest, TestCase1)
   int gridSize = 50;
   sleep(3);
 
-  for(unsigned int x = 0; x < gridSize; x++)
+//  for(unsigned int x = 0; x < gridSize; x++)
+//  {
+//    for(unsigned int y = 0; y < gridSize; y++)
+//    {
+//      pcl::PointXYZ pt(x / 10.0  , y / 10.0 , 0.5 * cos(double(x)/10.0) - 0.5 * sin(double(y)/10.0) + vtkMath::Random(0.0, 0.001));
+//      cloud.push_back(pt);
+//    }
+//  }
+//  cloud.is_dense = false;
+  if (pcl::io::loadPCDFile<pcl::PointXYZ>("/home/larmstrong/Downloads/godel_point_cloud_data/test.pcd", cloud) == -1) //* load the file
   {
-    for(unsigned int y = 0; y < gridSize; y++)
-    {
-      pcl::PointXYZ pt(x / 10.0  , y / 10.0 , 0.5 * cos(double(x)/10.0) - 0.5 * sin(double(y)/10.0) + vtkMath::Random(0.0, 0.001));
-      cloud.push_back(pt);
-    }
+    PCL_ERROR ("Couldn't read file test_pcd.pcd \n");
+    return;
   }
-  cloud.is_dense = false;
+
 
   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer(new pcl::visualization::PCLVisualizer("3D Viewer"));
   viewer->setBackgroundColor (0, 0, 0);
 
   std::cout << "starting test\n";
-  boost::shared_ptr<afront_meshing::AfrontMeshing> mesher(new afront_meshing::AfrontMeshing);
+//  boost::shared_ptr<afront_meshing::AfrontMeshing> mesher(new afront_meshing::AfrontMeshing);
+  afront_meshing::AfrontMeshing mesher;
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(cloud));
   std::cout << "number of cloud points: " << in_cloud->points.size() << "\n";
-  mesher->setViewer(viewer);
-  mesher->setInputCloud(in_cloud);
-  mesher->setRho(0.125);
-  mesher->setTriangleQuality(1.2);
-  mesher->setRadius(1.0);
+  mesher.setViewer(viewer);
+  mesher.setRho(0.05);
+  mesher.setTriangleQuality(1.2);
+  mesher.setRadius(0.02);
+  mesher.enableSnap(true);
+
   pcl::PolygonMesh out_mesh;
 
-  if(mesher->computeGuidanceField())
+  if(!mesher.initMesher(in_cloud))
   {
-    mesher->startMeshing();
-    out_mesh = mesher->getMesh();
-    viewer->addPolygonMesh(out_mesh);
+    std::cout << "failed to initialize mesher\n";
   }
   else
   {
-    std::cout << "failed to generate guidance field\n";
-  }
+    out_mesh = mesher.getMesh();
+    viewer->addPolygonMesh(out_mesh);
 
-  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> single_color(in_cloud, 0, 255, 0);
-  viewer->addPointCloud<pcl::PointXYZ> (in_cloud, single_color, "sample cloud");
+    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> single_color(in_cloud, 0, 255, 0);
+    viewer->addPointCloud<pcl::PointXYZ> (in_cloud, single_color, "sample cloud");
 
-  viewer->addCoordinateSystem(1.0);
-  viewer->initCameraParameters();
+    viewer->addCoordinateSystem(1.0);
+    viewer->initCameraParameters();
 
-  boost::function<void (const pcl::visualization::KeyboardEvent&)> keyboardEventOccurred = [viewer, mesher] (const pcl::visualization::KeyboardEvent &event)
-  {
-    if (event.getKeySym () == "n" && event.keyDown ())
+    boost::function<void (const pcl::visualization::KeyboardEvent&)> keyboardEventOccurred = [viewer, &mesher] (const pcl::visualization::KeyboardEvent &event)
     {
-      pcl::PolygonMesh out_mesh;
-      mesher->stepMesh();
-      out_mesh = mesher->getMesh();
-      viewer->removePolygonMesh();
-      viewer->addPolygonMesh(out_mesh);
-    }
-  };
+      if (event.getKeySym() == "n" && event.keyDown())
+      {
+        if (!mesher.isFinished())
+        {
+          pcl::PolygonMesh out_mesh;
+          mesher.stepMesh();
+//          mesher.generateMesh();
+          out_mesh = mesher.getMesh();
+          viewer->removePolygonMesh();
+          viewer->addPolygonMesh(out_mesh);
+        }
+      }
+    };
 
-  viewer->registerKeyboardCallback(keyboardEventOccurred);
-  viewer->spin();
+    viewer->registerKeyboardCallback(keyboardEventOccurred);
+    viewer->spin();
+  }
 }
 
 // Run all the tests that were declared with TEST()

@@ -21,33 +21,35 @@ namespace afront_meshing
         min = output[i].curvature;
     }
 
-    std::cout << "Minimum Curvature: " << min;
+    std::printf("Minimum Curvature: %f\n", min);
   }
 
-  pcl::PointNormal MLSSampling::samplePoint(const pcl::PointXYZ& pt) const
+  MLSSampling::SamplePointResults MLSSampling::samplePoint(const pcl::PointXYZ& pt) const
   {
     if (!pcl_isfinite(pt.x))
       std::cout << "Error: Sample point is not finite\n";
+
+    SamplePointResults result;
 
     // Get 3D position of point
     //Eigen::Vector3f pos = distinct_cloud_->points[dp_i].getVector3fMap ();
     std::vector<int> nn_indices;
     std::vector<float> nn_dists;
     tree_->nearestKSearch(pt, 1, nn_indices, nn_dists);
-    int input_index = nn_indices.front ();
+    result.closest = nn_indices.front();
+    result.dist = nn_dists.front();
 
     // If the closest point did not have a valid MLS fitting result
     // OR if it is too far away from the sampled point
-//    if (mls_results_[input_index].valid == false)
-//      continue;
+    if (mls_results_[result.closest].valid == false)
+      std::printf("\x1B[31m\tMLS Results Not Valid!\n");
 
     Eigen::Vector3d add_point = pt.getVector3fMap().template cast<double>();
-    float u_disp = static_cast<float> ((add_point - mls_results_[input_index].mean).dot(mls_results_[input_index].u_axis)),
-    v_disp = static_cast<float> ((add_point - mls_results_[input_index].mean).dot(mls_results_[input_index].v_axis));
+    float u_disp = static_cast<float> ((add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].u_axis)),
+    v_disp = static_cast<float> ((add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].v_axis));
 
-    pcl::PointNormal result_point;
     pcl::Normal result_normal;
-    MLSResult result_mls = mls_results_[input_index];
+    MLSResult result_mls = mls_results_[result.closest];
     projectPointToMLSSurface(u_disp, v_disp,
                              result_mls.u_axis,
                              result_mls.v_axis,
@@ -56,23 +58,23 @@ namespace afront_meshing
                              result_mls.curvature,
                              result_mls.c_vec,
                              result_mls.num_neighbors,
-                             result_point, result_normal);
+                             result.point, result_normal);
 
     // Copy additional point information if available
-    copyMissingFields(input_->points[input_index], result_point);
+    copyMissingFields(input_->points[result.closest], result.point);
 
     // Calculate principal curvature
     Eigen::Vector2f k = calculateCurvature(u_disp, v_disp, result_mls);
 
-    result_point.normal_x = result_normal.normal_x;
-    result_point.normal_y = result_normal.normal_y;
-    result_point.normal_z = result_normal.normal_z;
-    result_point.curvature = k.cwiseAbs().maxCoeff();
+    result.point.normal_x = result_normal.normal_x;
+    result.point.normal_y = result_normal.normal_y;
+    result.point.normal_z = result_normal.normal_z;
+    result.point.curvature = k.cwiseAbs().maxCoeff();
 
-    return result_point;
+    return result;
   }
 
-  pcl::PointNormal MLSSampling::samplePoint(const pcl::PointNormal& pt) const
+  MLSSampling::SamplePointResults MLSSampling::samplePoint(const pcl::PointNormal& pt) const
   {
     pcl::PointXYZ search_pt(pt.x, pt.y, pt.z);
     return samplePoint(search_pt);
@@ -110,14 +112,43 @@ namespace afront_meshing
     return calculateCurvature(0.0, 0.0, mls_results_[index]);
   }
 
-  void AfrontMeshing::setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud)
+
+
+  AfrontMeshing::AfrontMeshing() : mesh_vertex_data_(mesh_.getVertexDataCloud())
   {
-    input_cloud_ = cloud;//pcl::PointCloud<pcl::PointXYZ>::Ptr(cloud);
+    counter_ = 0;
+    finished_ = false;
+    snap_ = false;
+  }
+
+  bool AfrontMeshing::initMesher(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud)
+  {
+    std::printf("\x1B[36mInitializing Mesher!\n");
+    input_cloud_ = cloud;
+
+    // Generate the MLS surface
+    if (!computeGuidanceField())
+      return false;
+
+    // Create first triangle
+    createFirstTriangle(rand() % mls_cloud_->size());
+
+    // Get the inital boundary of the mesh
+    const HalfEdgeIndex& idx_he_boundary = mesh_.getOutgoingHalfEdgeIndex(mesh_.getVertexIndex(mesh_vertex_data_[0]));
+    IHEAFC       circ_iheaf     = mesh_.getInnerHalfEdgeAroundFaceCirculator(idx_he_boundary);
+    const IHEAFC circ_iheaf_end = circ_iheaf;
+    do
+    {
+      HalfEdgeIndex he = circ_iheaf.getTargetIndex();
+      queue_.push_back(he);
+    } while (++circ_iheaf != circ_iheaf_end);
+
+    return true;
   }
 
   bool AfrontMeshing::computeGuidanceField()
   {
-    mesh_vertex_data_ = pcl::PointCloud<MeshTraits::VertexData>::Ptr(&mesh_.getVertexDataCloud());
+    std::printf("\x1B[36mComputing Guidance Field!\n");
 
     input_cloud_tree_ = pcl::search::KdTree<pcl::PointXYZ>::Ptr(new pcl::search::KdTree<pcl::PointXYZ>);
     input_cloud_tree_->setInputCloud(input_cloud_);
@@ -134,6 +165,8 @@ namespace afront_meshing
     mls_.setUpsamplingMethod(pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal>::DISTINCT_CLOUD);
     mls_.setDistinctCloud(input_cloud_);
     mls_.process(*mls_cloud_);
+    if (mls_cloud_->empty())
+      return false;
 
     mls_cloud_tree_ = pcl::search::KdTree<pcl::PointNormal>::Ptr(new pcl::search::KdTree<pcl::PointNormal>);
     mls_cloud_tree_->setInputCloud(mls_cloud_);
@@ -156,37 +189,30 @@ namespace afront_meshing
     return pn;
   }
 
-  void AfrontMeshing::startMeshing()
+  void AfrontMeshing::generateMesh()
   {
-    counter_ = 0;
-    std::vector<int> K;
-    std::vector<float> K_dist;
-
-    std::cout << "starting meshing\n";
-
-    // Create first triangle
-    createFirstTriangle(2.5, 2.2, 0);
-
-    const HalfEdgeIndex& idx_he_boundary = mesh_.getOutgoingHalfEdgeIndex(mesh_.getVertexIndex(mesh_.getVertexDataCloud()[0]));
-    IHEAFC       circ_iheaf     = mesh_.getInnerHalfEdgeAroundFaceCirculator(idx_he_boundary);
-    const IHEAFC circ_iheaf_end = circ_iheaf;
-    do
-    {
-      HalfEdgeIndex he = circ_iheaf.getTargetIndex();
-      queue_.push_back(he);
-    } while (++circ_iheaf != circ_iheaf_end);
+    std::printf("\x1B[36mMeshing Started!\n");
+    while (!finished_)
+      stepMesh();
   }
 
   void AfrontMeshing::stepMesh()
   {
+    if (finished_)
+    {
+      std::printf("\x1B[31mTried to step mesh after it has finished meshing!\n");
+      return;
+    }
+
     counter_ += 1;
-    std::printf("Advancing Front: %d\n", counter_);
+    std::printf("\x1B[35mAdvancing Front: %lu\n", counter_);
     HalfEdgeIndex half_edge = queue_.front();
     queue_.pop_front();
 
     updateKdTree();
 
-    CanCutEarResults ccer = canCutEar(half_edge);
+    FrontData front = getAdvancingFrontData(half_edge);
+    CanCutEarResults ccer = canCutEar(front);
     if(viewer_)
     {
       // remove previouse iterations lines
@@ -206,36 +232,50 @@ namespace afront_meshing
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "HalfEdge");
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "NextHalfEdge");
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "PrevHalfEdge");
-//      viewer_->spinOnce();
     }
 
     if (ccer.valid)
     {
-      std::printf("  Performed Ear Cut Opperation\n");
+      std::printf("\x1B[34m  Performed Ear Cut Opperation\n");
       cutEar(*ccer.valid);
-      return;
-    }
-
-    // If we can not cut ear then try and grow.
-    PredictVertexResults pv = predictVertex(half_edge);
-    TriangleToCloseResults ttcr = isTriangleToClose(ccer, pv);
-    if (ttcr.type == TriangleToCloseTypes::None)
-    {
-      std::printf("  Performed Grow Opperation\n");
-      grow(ccer, pv);
     }
     else
     {
-      std::printf("  Performed Topology Event Opperation\n");
-      topologyEvent(ttcr);
+      // If we can not cut ear then try and grow.
+      PredictVertexResults pv = predictVertex(front);
+      if (pv.at_boundary)
+      {
+        std::printf("\x1B[32m  At Point Cloud Boundary\n");
+        boundary_.push_back(front.he);
+      }
+      else
+      {
+        TriangleToCloseResults ttcr = isTriangleToClose(ccer, pv);
+        if (ttcr.type == TriangleToCloseTypes::None)
+        {
+          std::printf("\x1B[32m  Performed Grow Opperation\n");
+          grow(ccer, pv);
+        }
+        else
+        {
+          std::printf("\x1B[33m  Performed Topology Event Opperation\n");
+          topologyEvent(ttcr);
+        }
+      }
     }
+
+    if(queue_.size() == 0)
+      finished_ = true;
   }
 
   void AfrontMeshing::updateKdTree()
   {
+    mesh_vertex_data_copy_.reset();
+    mesh_vertex_data_copy_ = pcl::PointCloud<MeshTraits::VertexData>::Ptr(new pcl::PointCloud<MeshTraits::VertexData>(mesh_.getVertexDataCloud()));
+
     mesh_tree_.reset();
     mesh_tree_ = pcl::search::KdTree<MeshTraits::VertexData>::Ptr(new pcl::search::KdTree<MeshTraits::VertexData>);
-    mesh_tree_->setInputCloud(mesh_vertex_data_);
+    mesh_tree_->setInputCloud(mesh_vertex_data_copy_);
   }
 
   void AfrontMeshing::createFirstTriangle(const double &x, const double &y, const double &z)
@@ -248,16 +288,22 @@ namespace afront_meshing
     middle_pt.y = y;
     middle_pt.z = z;
     mls_cloud_tree_->nearestKSearch(middle_pt, 1, K, K_dist);
+    createFirstTriangle(K[0]);
+  }
 
-    pcl::PointNormal sp = mls_.samplePoint(mls_cloud_->points[K[0]]);
-    Eigen::Vector3f p1 = sp.getVector3fMap();
+  void AfrontMeshing::createFirstTriangle(const int &index)
+  {
+    MLSSampling::SamplePointResults sp = mls_.samplePoint(mls_cloud_->points[index]);
+    Eigen::Vector3f p1 = sp.point.getVector3fMap();
 
     // Get the allowed grow distance
-    double d = 2 * std::sin(rho_/2) / sp.curvature;
+    double d = 2 * std::sin(rho_/2) / sp.point.curvature;
     GrowDistanceResults gdr = getGrowDistance(p1, d, d, d);
 
     // search for the nearest neighbor
-    mls_cloud_tree_->nearestKSearch(sp, 2, K, K_dist);
+    std::vector<int> K;
+    std::vector<float> K_dist;
+    mls_cloud_tree_->nearestKSearch(sp.point, 2, K, K_dist);
 
     // use l1 and nearest neighbor to extend edge
     pcl::PointNormal dp;
@@ -268,14 +314,23 @@ namespace afront_meshing
     v1 = v1.normalized();
     norm = dp.getNormalVector3fMap();
 
-    p2 = getPredictedVertex(p1, v1, gdr.l).getVector3fMap();
+    if (snap_)
+      p2 = (mls_cloud_->points[getPredictedVertex(p1, v1, gdr.l).closest]).getVector3fMap();
+    else
+      p2 = getPredictedVertex(p1, v1, gdr.l).point.getVector3fMap();
+
     mp = getMidPoint(p1, p2);
     d = getEdgeLength(p1, p2);
 
     v2 = norm.cross(v1).normalized();
 
     gdr = getGrowDistance(mp, d, d, d);
-    p3 = getPredictedVertex(mp, v2, gdr.l).getVector3fMap();
+    p3 = getPredictedVertex(mp, v2, gdr.l).point.getVector3fMap();
+
+    if (snap_)
+      p3 = (mls_cloud_->points[getPredictedVertex(mp, v2, gdr.l).closest]).getVector3fMap();
+    else
+      p3 = getPredictedVertex(mp, v2, gdr.l).point.getVector3fMap();
 
     MeshTraits::FaceData fd = createFaceData(p1, p2, p3);
     VertexIndices vi;
@@ -285,63 +340,55 @@ namespace afront_meshing
     mesh_.addFace(vi[0], vi[1], vi[2], fd);
   }
 
-  AfrontMeshing::CanCutEarResults AfrontMeshing::canCutEar(const HalfEdgeIndex &half_edge) const
+  AfrontMeshing::CanCutEarResults AfrontMeshing::canCutEar(const FrontData &front) const
   {
     CanCutEarResults result;
-    Eigen::Vector3f p1, p2, p3;
+    Eigen::Vector3f p3;
 
-    result.he = half_edge;
+    result.front = front;
 
     //////////////////////////
     // Check Next Half Edge //
     //////////////////////////
-    result.next.primary = half_edge;
-    result.next.secondary = getNextHalfEdge(half_edge);
+    result.next.primary = front.he;
+    result.next.secondary = getNextHalfEdge(front.he);
     result.next.valid = false;
-    result.next.same_face = false;
-    result.next.vi.push_back(mesh_.getOriginatingVertexIndex(result.next.primary));
-    result.next.vi.push_back(mesh_.getTerminatingVertexIndex(result.next.primary));
+    result.next.vi.push_back(front.vi[0]);
+    result.next.vi.push_back(front.vi[1]);
     result.next.vi.push_back(mesh_.getTerminatingVertexIndex(result.next.secondary));
-    p1 = (mesh_.getVertexDataCloud()[result.next.vi[0].get()]).getVector3fMap();
-    p2 = (mesh_.getVertexDataCloud()[result.next.vi[1].get()]).getVector3fMap();
-    p3 = (mesh_.getVertexDataCloud()[result.next.vi[2].get()]).getVector3fMap();
-    result.next.tri = getTriangleData(p1, p2, p3);
+    p3 = (mesh_vertex_data_[result.next.vi[2].get()]).getVector3fMap();
+    result.next.tri = getTriangleData(front, p3);
 
     // First check and make sure both half edges are not associated the same face
-    if (mesh_.getOppositeFaceIndex(result.next.primary) == mesh_.getOppositeFaceIndex(result.next.secondary))
-      result.next.same_face = true;
-    else
+    if (result.next.tri.valid)
       if (result.next.tri.a < 1.22173 && result.next.tri.b < 1.22173 && result.next.tri.c < 1.22173)
         result.next.valid = true;
 
     //////////////////////////
     // Check Prev Half Edge //
     //////////////////////////
-    result.prev.primary = half_edge;
-    result.prev.secondary = getPrevHalfEdge(half_edge);
+    result.prev.primary = front.he;
+    result.prev.secondary = getPrevHalfEdge(front.he);
     result.prev.valid = false;
-    result.prev.same_face = false;
-    result.prev.vi.push_back(mesh_.getOriginatingVertexIndex(result.prev.primary));
-    result.prev.vi.push_back(mesh_.getTerminatingVertexIndex(result.prev.primary));
+    result.prev.vi.push_back(front.vi[0]);
+    result.prev.vi.push_back(front.vi[1]);
     result.prev.vi.push_back(mesh_.getOriginatingVertexIndex(result.prev.secondary));
-    p1 = (mesh_.getVertexDataCloud()[result.prev.vi[0].get()]).getVector3fMap();
-    p2 = (mesh_.getVertexDataCloud()[result.prev.vi[1].get()]).getVector3fMap();
-    p3 = (mesh_.getVertexDataCloud()[result.prev.vi[2].get()]).getVector3fMap();
-    result.prev.tri = getTriangleData(p1, p2, p3);
+    p3 = (mesh_vertex_data_[result.prev.vi[2].get()]).getVector3fMap();
+    result.prev.tri = getTriangleData(front, p3);
 
     // First check and make sure both half edges are not associated the same face
-    if (mesh_.getOppositeFaceIndex(result.prev.primary) == mesh_.getOppositeFaceIndex(result.prev.secondary))
-      result.prev.same_face = true;
-    else
+    if (result.prev.tri.valid)
       if (result.prev.tri.a < 1.22173 && result.prev.tri.b < 1.22173 && result.prev.tri.c < 1.22173)
         result.prev.valid = true;
 
-    // Review results and choose the best one
+    ////////////////////////////////////////////
+    // Review results and choose the best one //
+    ////////////////////////////////////////////
     if (result.next.valid && result.prev.valid)
       if (result.next.tri.aspect_ratio < result.prev.tri.aspect_ratio)
-        result.valid = &result.next;
-      else
         result.valid = &result.prev;
+      else
+        result.valid = &result.next;
     else if (result.next.valid)
       result.valid = &result.next;
     else if (result.prev.valid)
@@ -353,9 +400,9 @@ namespace afront_meshing
   void AfrontMeshing::cutEar(const CanCutEarResult &data)
   {
     // Add new face
-    MeshTraits::FaceData new_fd = createFaceData((mesh_.getVertexDataCloud()[data.vi[0].get()]).getVector3fMap(),
-                                                 (mesh_.getVertexDataCloud()[data.vi[1].get()]).getVector3fMap(),
-                                                 (mesh_.getVertexDataCloud()[data.vi[2].get()]).getVector3fMap());
+    MeshTraits::FaceData new_fd = createFaceData((mesh_vertex_data_[data.vi[0].get()]).getVector3fMap(),
+                                                 (mesh_vertex_data_[data.vi[1].get()]).getVector3fMap(),
+                                                 (mesh_vertex_data_[data.vi[2].get()]).getVector3fMap());
     HalfEdgeIndex temp;
     if (data.vi[2] == mesh_.getOriginatingVertexIndex(data.secondary))
         temp = getPrevHalfEdge(data.secondary);
@@ -365,46 +412,74 @@ namespace afront_meshing
     mesh_.addFace(data.vi[0], data.vi[1], data.vi[2], new_fd);
 
     queue_.push_back(getNextHalfEdge(temp));
-    queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [data](HalfEdgeIndex he){ return ((he == data.primary) || (he == data.secondary));}), queue_.end());
+    queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [data](HalfEdgeIndex he){ return (he == data.secondary);}), queue_.end());
+    boundary_.erase(std::remove_if(boundary_.begin(), boundary_.end(), [data](HalfEdgeIndex he){ return (he == data.secondary);}), boundary_.end());
   }
 
-  AfrontMeshing::PredictVertexResults AfrontMeshing::predictVertex(const HalfEdgeIndex &half_edge) const
+  AfrontMeshing::FrontData AfrontMeshing::getAdvancingFrontData(const HalfEdgeIndex &half_edge) const
   {
-    // Local Variables
-    PredictVertexResults result;
-    Eigen::Vector3f p1, p2;
-
-    // Get Afront FaceData
+    FrontData result;
     result.he = half_edge;
+
     FaceIndex face_indx = mesh_.getOppositeFaceIndex(half_edge);
     MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[face_indx.get()];
 
     // Get Half Edge Vertexs
-    result.vi.push_back(mesh_.getOriginatingVertexIndex(half_edge));
-    result.vi.push_back(mesh_.getTerminatingVertexIndex(half_edge));
-    p1 = (mesh_.getVertexDataCloud()[result.vi[0].get()]).getVector3fMap();
-    p2 = (mesh_.getVertexDataCloud()[result.vi[1].get()]).getVector3fMap();
+    result.vi[0] = mesh_.getOriginatingVertexIndex(half_edge);
+    result.vi[1] = mesh_.getTerminatingVertexIndex(half_edge);
+    result.p[0] = (mesh_vertex_data_[result.vi[0].get()]).getVector3fMap();
+    result.p[1] = (mesh_vertex_data_[result.vi[1].get()]).getVector3fMap();
+
+    // Calculate the half edge length
+    result.length = getEdgeLength(result.p[0], result.p[1]);
+
+    // Get half edge midpoint
+    result.mp = getMidPoint(result.p[0], result.p[1]);
+
+    // Calculate the grow direction vector
+    result.d = getGrowDirection(result.p[0], result.mp, fd);
+
+    return result;
+  }
+
+  AfrontMeshing::PredictVertexResults AfrontMeshing::predictVertex(const FrontData &front) const
+  {
+    // Local Variables
+    PredictVertexResults result;
+    result.front = front;
 
     // Calculate min max of all lengths attached to half edge
-    Eigen::Vector2d mm = getMinMaxEdgeLength(result.vi[0], result.vi[1]);
-
-    // find the mid point of the edge
-    result.mp = getMidPoint(p1, p2);
-
-    // Calculate the edge length
-    double l = getEdgeLength(p1, p2);
-
-    // Calculate direction vector to move
-    result.d = getGrowDirection(p1, result.mp, fd);
+    Eigen::Vector2d mm = getMinMaxEdgeLength(front.vi[0], front.vi[1]);
 
     // Get the allowed grow distance
-    result.gdr = getGrowDistance(result.mp, l, mm[0], mm[1]);
+    result.gdr = getGrowDistance(front.mp, front.length, mm[0], mm[1]);
 
     // Get predicted vertex
-    result.pv = getPredictedVertex(result.mp, result.d, result.gdr.l);
+    result.pv = getPredictedVertex(front.mp, front.d, result.gdr.l);
+
+    // Check and see if there any point in the grow direction of the front.
+    // If not then it is at the boundary of the point cloud.
+    result.at_boundary = true;
+    Eigen::Vector3f v1 = (front.p[1] - front.mp).normalized();
+    Eigen::Vector3f closest = (mls_cloud_->at(result.pv.closest)).getVector3fMap();
+    Eigen::Vector3f v2 = closest - front.mp;
+    double dot1 = v2.dot(front.d);
+    double dot2 = v2.dot(v1);
+    if ((dot1 > 0.00001) && (std::abs(dot2) <= front.length/2.0))
+      result.at_boundary = false;
 
     // Get triangle Data
-    result.tri = getTriangleData(p1, p2, result.pv.getVector3fMap());
+    if (snap_)
+    {
+      result.tri = getTriangleData(front, mls_cloud_->points[result.pv.closest].getVector3fMap());
+//      std::printf("  At Boundary: %i\n", result.at_boundary);
+//      std::printf("  Aspect Ratio: %f\n", result.tri.aspect_ratio);
+      if (result.at_boundary == false && result.tri.aspect_ratio < 0.1)
+        result.at_boundary = true;
+//      std::printf("  At Boundary: %i\n", result.at_boundary);
+    }
+    else
+      result.tri = getTriangleData(front, result.pv.point.getVector3fMap());
 
     return result;
   }
@@ -420,19 +495,21 @@ namespace afront_meshing
       result.type = TriangleToCloseTypes::None;
 
       // Before checking fence violation lets check previous and next half edge and make sure there is not an issue.
-      if (!ccer.next.same_face && pvr.tri.c >= ccer.next.tri.c)
-      {
-        result.type = TriangleToCloseTypes::NeighborHalfEdge;
-        result.data = &result.ccer.next;
-        return result;
-      }
+      // TODO: Need to improve such that two triangles get created for this case (ccer.next.tri.c <= 1.5708)
+      // TODO: Need to improve where a new triangle gets created while modify the other for this case (pvr.tri.c >= ccer.next.tri.c)
+      if (ccer.next.tri.valid)
+        if (pvr.tri.c >= ccer.next.tri.c || ccer.next.tri.c <= 1.5708)
+        {
+          result.type = TriangleToCloseTypes::NextHalfEdge;
+          return result;
+        }
 
-      if (!ccer.prev.same_face && pvr.tri.b >= ccer.prev.tri.b)
-      {
-        result.type = TriangleToCloseTypes::NeighborHalfEdge;
-        result.data = &result.ccer.prev;
-        return result;
-      }
+      if (ccer.prev.tri.valid)
+        if(pvr.tri.b >= ccer.prev.tri.b || ccer.prev.tri.b <= 1.5708)
+        {
+          result.type = TriangleToCloseTypes::PrevHalfEdge;
+          return result;
+        }
 
       // search for the nearest neighbor
       pcl::PointXYZ search_pt(pvr.tri.p[2](0), pvr.tri.p[2](1), pvr.tri.p[2](2));
@@ -440,7 +517,7 @@ namespace afront_meshing
 
       for( auto i = 0; i < K.size(); ++i)
       {
-        MeshTraits::VertexData &data = mesh_vertex_data_->at(K[i]);
+        MeshTraits::VertexData &data = mesh_vertex_data_.at(K[i]);
         VertexIndex vi = mesh_.getVertexIndex(data);
 
         OHEAVC       circ_oheav     = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(vi);
@@ -448,28 +525,28 @@ namespace afront_meshing
 
         do
         {
+
           HalfEdgeIndex he = circ_oheav.getTargetIndex();
-          if (mesh_.isBoundary(he) && (he != pvr.he) && (he != ccer.prev.secondary) && (he != ccer.next.secondary))
+          if (mesh_.isBoundary(he) && (he != pvr.front.he) && (he != ccer.prev.secondary) && (he != ccer.next.secondary))
           {
-            DistPointToHalfEdgeResults dist = distPointToHalfEdge(pvr.tri.p[2], he);
+            DistPointToHalfEdgeResults new_dist = distPointToHalfEdge(pvr.tri.p[2], he);
             if (!checkFence(pvr.tri.p[0], pvr.tri.p[2], he))
             {
               result.type = TriangleToCloseTypes::FenceViolation;
-              result.data = new DistPointToHalfEdgeResults(dist);
+              result.dist = new_dist;
               break;
             }
-            else if (dist.line < pvr.gdr.l * 0.5)
+            else if (result.dist.line < pvr.gdr.l * 0.5)
             {
               if (result.type == TriangleToCloseTypes::None)
               {
                 result.type = TriangleToCloseTypes::CloseProximity;
-                result.data = new DistPointToHalfEdgeResults(dist);
+                result.dist = new_dist;
               }
               else
               {
-                DistPointToHalfEdgeResults *dist_current = static_cast<DistPointToHalfEdgeResults*>(result.data);
-                if (dist.line < dist_current->line)
-                  result.data = new DistPointToHalfEdgeResults(dist);
+                if (new_dist.line < result.dist.line)
+                  result.dist = new_dist;
               }
             }
           }
@@ -505,8 +582,8 @@ namespace afront_meshing
     Eigen::Vector3f p1, p2;
 
     results.he = half_edge;
-    p1 = (mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
-    p2 = (mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
+    p1 = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
+    p2 = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
     Eigen::Vector3f v = p2 - p1;
     Eigen::Vector3f w = p - p1;
 
@@ -537,8 +614,8 @@ namespace afront_meshing
   {
     // Define parametric equation of fence plane
     Eigen::Vector3f he_p1, he_p2;
-    he_p1 = (mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
-    he_p2 = (mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
+    he_p1 = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
+    he_p2 = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
 
     MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(half_edge).get()];
 
@@ -569,9 +646,7 @@ namespace afront_meshing
     // Add new face
     MeshTraits::FaceData new_fd = createFaceData(pvr.tri.p[0], pvr.tri.p[1], pvr.tri.p[2]);
     pcl::PointXYZ np(pvr.tri.p[2](0), pvr.tri.p[2](1), pvr.tri.p[2](2));
-    FaceIndex face_index = mesh_.addFace(pvr.vi[0], pvr.vi[1], mesh_.addVertex(np), new_fd);
-    mesh_tree_->setInputCloud(mesh_vertex_data_); // This may need to be replaced with using an octree.
-
+    mesh_.addFace(pvr.front.vi[0], pvr.front.vi[1], mesh_.addVertex(np), new_fd);
 
     // Add new half edges to the queue
     queue_.push_back(getNextHalfEdge(ccer.prev.secondary));
@@ -580,28 +655,45 @@ namespace afront_meshing
 
   void AfrontMeshing::topologyEvent(const TriangleToCloseResults &ttcr)
   {
-    if (ttcr.type == TriangleToCloseTypes::NeighborHalfEdge)
+    if (ttcr.type == TriangleToCloseTypes::PrevHalfEdge)
     {
-      std::printf("\tForced Ear Cut Opperation!\n");
-      cutEar(*static_cast<CanCutEarResult*>(ttcr.data));
+      std::printf("\x1B[32m\tForced Ear Cut Opperation with Previous Half Edge!\n");
+      cutEar(ttcr.ccer.prev);
+    }
+    else if (ttcr.type == TriangleToCloseTypes::NextHalfEdge)
+    {
+      std::printf("\x1B[32m\tForced Ear Cut Opperation with Previous Half Edge!\n");
+      cutEar(ttcr.ccer.next);
     }
     else if (ttcr.type == TriangleToCloseTypes::CloseProximity)
     {
-      std::printf("\tNeed to implement CloseProximity!\n");
+      std::printf("\x1B[31m\tNeed to implement CloseProximity!\n");
     }
     else if (ttcr.type == TriangleToCloseTypes::FenceViolation)
     {
-      std::printf("\tNeed to implement FenceViolation!\n");
+      std::printf("\x1B[31m\tMerging triangle due to FenceViolation!\n");
+      merge(ttcr);
     }
   }
 
-//  AfrontMeshing::VertexIndex AfrontMeshing::merge(const TriangleToCloseResults &tc)
-//  {
-//    MeshTraits::FaceData new_fd = createFaceData(tc.pvr.tri.p[0], tc.pvr.tri.p[1], (mesh_.getVertexDataCloud()[tc.closest.get()]).getVector3fMap());
-//    mesh_.addFace(tc.pvr.vi[0], tc.pvr.vi[1], tc.closest, new_fd);
-//    mesh_tree_->setInputCloud(mesh_vertex_data_); // This may need to be replaced with using an octree.
-//    return tc.closest;
-//  }
+  void AfrontMeshing::merge(const TriangleToCloseResults &ttcr)
+  {
+    VertexIndex closest;
+    if (ttcr.dist.end < ttcr.dist.start)
+      closest = mesh_.getTerminatingVertexIndex(ttcr.dist.he);
+    else
+      closest = mesh_.getOriginatingVertexIndex(ttcr.dist.he);
+
+    if (ttcr.dist.he == ttcr.ccer.prev.secondary || ttcr.dist.he == ttcr.ccer.next.secondary)
+      std::printf("\x1B[31m\tError in AfrontMeshing::merge!\n");
+
+    MeshTraits::FaceData new_fd = createFaceData(ttcr.pvr.tri.p[0], ttcr.pvr.tri.p[1], (mesh_vertex_data_[closest.get()]).getVector3fMap());
+    mesh_.addFace(ttcr.pvr.front.vi[0], ttcr.pvr.front.vi[1], closest, new_fd);
+
+    // Add new half edges to the queue
+    queue_.push_back(getNextHalfEdge(ttcr.ccer.prev.secondary));
+    queue_.push_back(getPrevHalfEdge(ttcr.ccer.next.secondary));
+  }
 
   float AfrontMeshing::getCurvature(const int &index) const
   {
@@ -639,16 +731,14 @@ namespace afront_meshing
   AfrontMeshing::GrowDistanceResults AfrontMeshing::getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length, const double &min_length, const double &max_length) const
   {
     GrowDistanceResults gdr;
-    std::vector<int> K;
-    std::vector<float> K_dist;
-
     pcl::PointNormal pn;
+
     pn.x = mp(0);
     pn.y = mp(1);
     pn.z = mp(2);
-    int cnt = mls_cloud_tree_->radiusSearch(pn, reduction_ * max_length, K, K_dist);
+    int cnt = mls_cloud_tree_->radiusSearch(pn, reduction_ * max_length, gdr.k, gdr.k_dist);
     gdr.valid = false;
-    gdr.max_curv = getMaxCurvature(K);
+    gdr.max_curv = getMaxCurvature(gdr.k);
     if (cnt > 0)
     {
       gdr.valid = true;
@@ -704,7 +794,7 @@ namespace afront_meshing
     return gdr;
   }
 
-  pcl::PointNormal AfrontMeshing::getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const
+  MLSSampling::SamplePointResults AfrontMeshing::getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const
   {
     Eigen::Vector3f p = mp + l * d;
 
@@ -738,8 +828,8 @@ namespace afront_meshing
       {
         HalfEdgeIndex he = circ_oheav.getTargetIndex();
         pcl::PointXYZ p1, p2;
-        p1 = mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(he).get()];
-        p2 = mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(he).get()];
+        p1 = mesh_vertex_data_[mesh_.getOriginatingVertexIndex(he).get()];
+        p2 = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()];
         double d = getEdgeLength(p1.getVector3fMap(), p2.getVector3fMap());
         if (d > result[1])
           result[1] = d;
@@ -756,8 +846,8 @@ namespace afront_meshing
       {
         HalfEdgeIndex he = circ_oheav.getTargetIndex();
         pcl::PointXYZ p1, p2;
-        p1 = mesh_.getVertexDataCloud()[mesh_.getOriginatingVertexIndex(he).get()];
-        p2 = mesh_.getVertexDataCloud()[mesh_.getTerminatingVertexIndex(he).get()];
+        p1 = mesh_vertex_data_[mesh_.getOriginatingVertexIndex(he).get()];
+        p2 = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()];
         double d = getEdgeLength(p1.getVector3fMap(), p2.getVector3fMap());
         if (d > result[1])
           result[1] = d;
@@ -770,44 +860,56 @@ namespace afront_meshing
     return result;
   }
 
-  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const Eigen::Vector3f p3) const
+  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const Eigen::Vector3f p3) const
   {
     TriangleData result;
     Eigen::Vector3f v1, v2, v3, cross;
-    double dot, sina, cosa, bottom;
+    double dot, sina, cosa, top, bottom;
 
-    v1 = p1 - p2;
-    v2 = p3 - p2;
-    v3 = p1 - p3;
+    result.valid = true;
+
+    v1 = front.p[1] - front.p[0];
+    v2 = p3 - front.p[1];
+    v3 = p3 - front.p[0];
+
+    dot = v2.dot(front.d);
+    if (dot <= 0.0)
+      result.valid = false;
 
     result.A = v1.norm();
     result.B = v2.norm();
     result.C = v3.norm();
 
-    result.aspect_ratio = std::max(std::max(result.A, result.B), result.C)/std::min(std::min(result.A, result.B), result.C);
 
-    // Check first angle of triangle
+//    result.aspect_ratio = std::max(std::max(result.A, result.B), result.C)/std::min(std::min(result.A, result.B), result.C);
+
+
+    // Calculate the first angle of triangle
+    dot = v1.dot(v3);
+    cross = v1.cross(v3);
+    bottom = result.A * result.C;
+    top = cross.norm();
+    sina = cross.norm()/bottom;
+    cosa = dot/bottom;
+    result.b = atan2(sina, cosa);
+
+    double area = 0.5 * top;
+    result.aspect_ratio = (4 * area * std::sqrt(3)) / (result.A * result.A + result.B * result.B + result.C * result.C);
+
+    // Check the second angle of triangle
+    v1 *= -1.0;
     dot = v1.dot(v2);
     cross = v1.cross(v2);
-    bottom = v1.norm() * v2.norm();
+    bottom = result.A * result.B;
     sina = cross.norm()/bottom;
     cosa = dot/bottom;
     result.c = atan2(sina, cosa);
 
-    // Check second angle of triangle
-    v2 *= -1.0;
-    dot = v2.dot(v3);
-    cross = v2.cross(v3);
-    bottom = v2.norm() * v3.norm();
-    sina = cross.norm()/bottom;
-    cosa = dot/bottom;
-    result.a = atan2(sina, cosa);
-
-    result.b = M_PI - result.a - result.c;
+    result.a = M_PI - result.b - result.c;
 
     // Store point information
-    result.p[0] = p1;
-    result.p[1] = p2;
+    result.p[0] = front.p[0];
+    result.p[1] = front.p[1];
     result.p[2] = p3;
 
     return result;
@@ -838,7 +940,7 @@ namespace afront_meshing
     std::cout << "Vertices:\n   ";
     for (unsigned int i=0; i<mesh_.sizeVertices(); ++i)
     {
-      std::cout << mesh_.getVertexDataCloud()[i] << " ";
+      std::cout << mesh_vertex_data_[i] << " ";
     }
     std::cout << std::endl;
   }
@@ -846,18 +948,16 @@ namespace afront_meshing
   void AfrontMeshing::printFaces() const
   {
     std::cout << "Faces:\n";
-    for (unsigned int i=0; i<mesh_.sizeFaces(); ++i)
-    {
+    for (unsigned int i=0; i < mesh_.sizeFaces(); ++i)
       printFace(FaceIndex(i));
-    }
   }
 
   void AfrontMeshing::printEdge(const HalfEdgeIndex &half_edge) const
   {
     std::cout << "  "
-              << mesh_.getVertexDataCloud() [mesh_.getOriginatingVertexIndex(half_edge).get()]
+              << mesh_vertex_data_ [mesh_.getOriginatingVertexIndex(half_edge).get()]
               << " "
-              << mesh_.getVertexDataCloud() [mesh_.getTerminatingVertexIndex(half_edge).get()]
+              << mesh_vertex_data_ [mesh_.getTerminatingVertexIndex(half_edge).get()]
               << std::endl;
   }
 
@@ -869,7 +969,7 @@ namespace afront_meshing
     std::cout << "  ";
     do
     {
-      std::cout << mesh_.getVertexDataCloud() [circ.getTargetIndex().get()] << " ";
+      std::cout << mesh_vertex_data_ [circ.getTargetIndex().get()] << " ";
     } while (++circ != circ_end);
     std::cout << std::endl;
   }

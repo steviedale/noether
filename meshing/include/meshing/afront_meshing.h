@@ -22,15 +22,21 @@ namespace afront_meshing
 {
   //template <typename PointInT, typename PointOutT> void
 
-  class MLSSampling : public pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal>
+  class MLSSampling : public pcl::MovingLeastSquaresOMP<pcl::PointXYZ, pcl::PointNormal>
   {
   public:
+    struct SamplePointResults
+    {
+      pcl::PointNormal point;   /**< @brief The point projected on to the MLS surface */
+      int              closest; /**< @brief The closest point index on the MLS surface to the project point */
+      double           dist;    /**< @brief The distance squared between point and closest */
+    };
 
     void process(pcl::PointCloud<pcl::PointNormal> &output);
 
     // expose protected function 'performUpsampling' from MLS
-    pcl::PointNormal samplePoint(const pcl::PointXYZ& pt) const;
-    pcl::PointNormal samplePoint(const pcl::PointNormal& pt) const;
+    MLSSampling::SamplePointResults samplePoint(const pcl::PointXYZ& pt) const;
+    MLSSampling::SamplePointResults samplePoint(const pcl::PointNormal& pt) const;
 
   private:
 
@@ -74,11 +80,13 @@ namespace afront_meshing
 
     struct GrowDistanceResults
     {
-      double l;         /**< @brief Allowed grow distance perpendicular to half edge */
-      double estimated; /**< @brief The calculated edge length */
-      double ideal;     /**< @brief The ideal edge length */
-      double max_curv;  /**< @brief The maximum curvature found with search radius */
-      bool valid;       /**< @brief True if successful, otherwise false */
+      double l;                  /**< @brief Allowed grow distance perpendicular to half edge */
+      double estimated;          /**< @brief The calculated edge length */
+      double ideal;              /**< @brief The ideal edge length */
+      double max_curv;           /**< @brief The maximum curvature found with search radius */
+      std::vector<int> k;        /**< @brief The resultant indices of the neighboring points */
+      std::vector<float> k_dist; /**< @brief The resultant squared distances to the neighboring points */
+      bool valid;                /**< @brief True if successful, otherwise false */
     };
 
     struct TriangleData
@@ -91,6 +99,7 @@ namespace afront_meshing
       double c;             /**< @brief The anble AB */
       double aspect_ratio;  /**< @brief The quality of the triangle (1.0 is the best) */
       Eigen::Vector3f p[3]; /**< @brief Stores the point information for the triangle */
+      bool valid;           /**< @brief Indicates if the triangle is valid. Both edges must point in the same direction as the grow direction. */
 
       void print(const std::string description = "") const
       {
@@ -105,16 +114,24 @@ namespace afront_meshing
       }
     };
 
-    struct PredictVertexResults
+    struct FrontData
     {
       HalfEdgeIndex he;        /**< @brief The half edge index from which to grow the triangle */
-      GrowDistanceResults gdr; /**< @brief Allowed grow distance */
-      TriangleData tri;        /**< @brief The proposed triangle data */
-      VertexIndices vi;        /**< @brief Stores triangle indicies */
+      double length;           /**< @brief The half edge length */
       Eigen::Vector3f mp;      /**< @brief The half edge mid point */
-      pcl::PointNormal pv;     /**< @brief The predicted point projected on the mls surface */
-      Eigen::Vector3f d;       /**< @brief The grow direction */
-      Eigen::Vector2d k;       /**< @brief The principal curvature using the polynomial */
+      Eigen::Vector3f d;       /**< @brief The half edge grow direction */
+      VertexIndex vi[2];       /**< @brief The half edge vertex indicies */
+      Eigen::Vector3f p[2];    /**< @brief The half edge points (Origninating, Terminating) */
+    };
+
+    struct PredictVertexResults
+    {
+      FrontData front;                        /**< @brief Advancing front data */
+      GrowDistanceResults gdr;                /**< @brief Allowed grow distance */
+      TriangleData tri;                       /**< @brief The proposed triangle data */
+      MLSSampling::SamplePointResults pv;     /**< @brief The predicted point projected on the mls surface */
+      Eigen::Vector2d k;                      /**< @brief The principal curvature using the polynomial */
+      bool at_boundary;                        /**< @brief The predicted vertex is near the boundry of the point cloud */
     };
 
     struct DistPointToHalfEdgeResults
@@ -131,15 +148,14 @@ namespace afront_meshing
       HalfEdgeIndex secondary; /**< @brief The Secondary half edge triangle (Previouse or Next) */
       VertexIndices vi;        /**< @brief The vertex indicies of the potential triangle */
       TriangleData tri;        /**< @brief The Triangle information */
-      bool same_face;          /**< @brief Is the half edge's associated to the same face as he */
-      bool valid;              /**< @brief Whether the tianble meets the criteria */
+      bool valid;              /**< @brief Whether the triangle meets the criteria */
     };
 
     struct CanCutEarResults
     {
       CanCutEarResults() {valid = nullptr;}
 
-      HalfEdgeIndex he;       /**< @brief The half edge index from which to grow the triangle */
+      FrontData front;        /**< @brief Advancing front data */
       CanCutEarResult prev;   /**< @brief The results using the previous half edge */
       CanCutEarResult next;   /**< @brief The results using the next half edge */
       CanCutEarResult *valid; /**< @brief The valid ear cutting option available */
@@ -148,89 +164,113 @@ namespace afront_meshing
     enum TriangleToCloseTypes
     {
       None = 0,             /**< @brief There is no violation */
-      NeighborHalfEdge = 1, /**< @brief The new trianble interfereces with either the next or previous half edge. */
-      FenceViolation = 2,   /**< @brief The new triangle violates another half edges fence. */
-      CloseProximity = 3,   /**< @brief The new triangle is in close proximity to another half edge. */
+      PrevHalfEdge = 1,     /**< @brief The new trianble interfereces with the previous half edge. */
+      NextHalfEdge = 2,     /**< @brief The new trianble interfereces with the next half edge. */
+      FenceViolation = 3,   /**< @brief The new triangle violates another half edges fence. */
+      CloseProximity = 4,   /**< @brief The new triangle is in close proximity to another half edge. */
     };
 
     struct TriangleToCloseResults
     {
-      TriangleToCloseResults() {data = nullptr;}
-      ~TriangleToCloseResults()
-      {
-        if (type == TriangleToCloseTypes::CloseProximity || type == TriangleToCloseTypes::FenceViolation)
-          delete static_cast<DistPointToHalfEdgeResults*>(data);
-      }
-
       TriangleToCloseTypes type;       /**< @brief The type of violation. */
       PredictVertexResults pvr;        /**< @brief The predicted vertex information provided */
       CanCutEarResults ccer;           /**< @brief The can cut ear results */
-      void *data;                      /**< @brief This stores the data associated to the violation. */
+      DistPointToHalfEdgeResults dist; /**< @brief This stores closest distance information */
     };
 
   public:
-     /** @brief Set the input cloud to generate the mesh from. */
-     void setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
-     bool computeGuidanceField();
-     void setViewer(boost::shared_ptr<pcl::visualization::PCLVisualizer> &viewer) {viewer_ = viewer;}
-     void startMeshing();
-     void stepMesh();
+    /** @brief AfrontMeshing */
+    AfrontMeshing();
+    ~AfrontMeshing() {}
 
-     pcl::PolygonMesh getMesh() const;
+    /** @brief This sets everything up for meshing */
+    bool initMesher(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
 
-     pcl::PointCloud<pcl::Normal>::ConstPtr getNormals() const;
+    /** @brief This will mesh the point cloud passed to the initMesher funciton */
+    void generateMesh();
 
-     /** @brief Set the primary variable used to control mesh triangulation size */
-     void setRho(double val){rho_ = val;}
+    /** @brief Attempted to advance the mesh by adding one triangle */
+    void stepMesh();
 
-     /** @brief Get the primary variable used to control mesh triangulation size */
-     double getRho() const {return rho_;}
+    void setViewer(boost::shared_ptr<pcl::visualization::PCLVisualizer> &viewer) {viewer_ = viewer;}
 
-     /** @brief Set how fast can the mesh grow and shrink. (val > 1.0) */
-     void setTriangleQuality(double val) {reduction_ = val;}
+    /** @brief This will force every point projected onto the mls surface to snap to existing data. */
+    void enableSnap(const bool &enable) {snap_ = enable;}
 
-     /** @brief Get the variable that controls howw fast the mesh can grow and shrink. */
-     double getTriangleQuality() const {return reduction_;}
+    /** @brief Indicates if it has finished meshing the surface */
+    bool isFinished() {return finished_;}
 
-     /** @brief Set the mls radius used for smoothing */
-     void setRadius(double val){r_ = val;}
+    /** @brief Get the current polygon mesh */
+    pcl::PolygonMesh getMesh() const;
 
-     /** @brief Get the mls radius used for smoothing */
-     double getRadius() const {return r_;}
+    /** @brief Get the normals */
+    pcl::PointCloud<pcl::Normal>::ConstPtr getNormals() const;
 
-     /** @brief Create the first triangle given a starting location. */
-     void createFirstTriangle(const double &x, const double &y, const double &z);
+    /** @brief Set the primary variable used to control mesh triangulation size */
+    void setRho(double val){rho_ = val;}
 
-     CanCutEarResults canCutEar(const HalfEdgeIndex &half_edge) const;
+    /** @brief Get the primary variable used to control mesh triangulation size */
+    double getRho() const {return rho_;}
 
-     PredictVertexResults predictVertex(const HalfEdgeIndex &half_edge) const;
+    /** @brief Set how fast can the mesh grow and shrink. (val > 1.0) */
+    void setTriangleQuality(double val) {reduction_ = val;}
 
-     TriangleToCloseResults isTriangleToClose(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const;
+    /** @brief Get the variable that controls howw fast the mesh can grow and shrink. */
+    double getTriangleQuality() const {return reduction_;}
 
-     void grow(const CanCutEarResults &ccer, const PredictVertexResults &pvr);
+    /** @brief Set the mls radius used for smoothing */
+    void setRadius(double val){r_ = val;}
 
-     void topologyEvent(const TriangleToCloseResults &ttcr);
-//     VertexIndex merge(const TriangleToCloseResults &tc);
+    /** @brief Get the mls radius used for smoothing */
+    double getRadius() const {return r_;}
 
-     /** @brief Perform an ear cut operation */
-     void cutEar(const CanCutEarResult &data);
+    /** @brief Create the first triangle given a starting location. */
+    void createFirstTriangle(const int &index);
+    void createFirstTriangle(const double &x, const double &y, const double &z);
 
-     /** @brief Print all of the meshes vertices */
-     void printVertices() const;
+    CanCutEarResults canCutEar(const FrontData &front) const;
 
-     /** @brief Print all of the meshes faces */
-     void printFaces() const;
+    PredictVertexResults predictVertex(const FrontData &front) const;
 
-     /** @brief Print a given half edges vertices */
-     void printEdge(const HalfEdgeIndex &half_edge) const;
+    TriangleToCloseResults isTriangleToClose(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const;
 
-     /** @brief Print a given face's information */
-     void printFace(const FaceIndex &idx_face) const;
+    void grow(const CanCutEarResults &ccer, const PredictVertexResults &pvr);
 
-     /** @brief Convert Eigen Vector3f to PCL PointXYZ */
-     pcl::PointXYZ convertEigenToPCL(const Eigen::Vector3f &p) const;
+    void topologyEvent(const TriangleToCloseResults &ttcr);
+    void merge(const TriangleToCloseResults &ttcr);
+
+    /** @brief Perform an ear cut operation */
+    void cutEar(const CanCutEarResult &data);
+
+    /** @brief Print all of the meshes vertices */
+    void printVertices() const;
+
+    /** @brief Print all of the meshes faces */
+    void printFaces() const;
+
+    /** @brief Print a given half edges vertices */
+    void printEdge(const HalfEdgeIndex &half_edge) const;
+
+    /** @brief Print a given face's information */
+    void printFace(const FaceIndex &idx_face) const;
+
+    /** @brief Convert Eigen Vector3f to PCL PointXYZ */
+    pcl::PointXYZ convertEigenToPCL(const Eigen::Vector3f &p) const;
 
   private:
+
+     /**
+      * @brief This creates the MLS surface.
+      * @return True if successful, otherwise false.
+      */
+     bool computeGuidanceField();
+
+     /**
+      * @brief This calculates useful data about the advancing front used throughout.
+      * @param half_edge Advancing half edge index
+      * @return Data about the advancing half edge
+      */
+     FrontData getAdvancingFrontData(const HalfEdgeIndex &half_edge) const;
 
      MeshTraits::FaceData createFaceData(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3) const;
 
@@ -262,7 +302,7 @@ namespace afront_meshing
      /**
       * @brief Get the allowed grow distance
       * @param mp The mid point of the half edge
-      * @package edge_length The half edge length
+      * @param edge_length The half edge length
       * @param min_length The minium edge length attached to half edge
       * @param max_length The maximum edge length attached to half edge
       * @return The allowed grow distance
@@ -274,9 +314,9 @@ namespace afront_meshing
       * @param mp The mid point of the half edge from which to grow the triangle
       * @param d The direction to grow the trianlge
       * @param l The allowed grow distance
-      * @return The predicted vertex.
+      * @return The predicted vertex data.
       */
-     pcl::PointNormal getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const;
+     MLSSampling::SamplePointResults getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const;
 
      /**
       * @brief Gets the Minimum and Maximum edge attached to half edge
@@ -308,12 +348,11 @@ namespace afront_meshing
 
      /**
       * @brief Calculate triangle information.
-      * @param p1 First point of triangle
-      * @param p2 First point of triangle
+      * @param front The advancing front
       * @param p3 First point of triangle
       * @return Returns information about the triangle: angles, edge lengths, etc.
       */
-     TriangleData getTriangleData(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const Eigen::Vector3f p3) const;
+     TriangleData getTriangleData(const FrontData &front, const Eigen::Vector3f p3) const;
 
      /**
       * @brief Check if a line segment intersects a half edge fence.
@@ -323,6 +362,7 @@ namespace afront_meshing
       * @return False if the line segment intersects the half edge fence, otherwise True
       */
      bool checkFence(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const HalfEdgeIndex &half_edge) const;
+
 
      pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud_;
      pcl::search::KdTree<pcl::PointXYZ>::Ptr input_cloud_tree_;
@@ -338,10 +378,14 @@ namespace afront_meshing
      double r_;
 
      Mesh mesh_; /**< The mesh object for inserting faces/vertices */
-     pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_;
+     pcl::PointCloud<MeshTraits::VertexData> &mesh_vertex_data_;
+     pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_copy_;
      pcl::search::KdTree<MeshTraits::VertexData>::Ptr mesh_tree_;
 
      std::deque<HalfEdgeIndex> queue_;
+     std::vector<HalfEdgeIndex> boundary_;
+     bool snap_;
+     bool finished_;
 
      std::uint64_t counter_;
      boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer_;
