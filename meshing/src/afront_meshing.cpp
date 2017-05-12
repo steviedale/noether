@@ -530,13 +530,22 @@ namespace afront_meshing
           if (mesh_.isBoundary(he) && (he != pvr.front.he) && (he != ccer.prev.secondary) && (he != ccer.next.secondary))
           {
             DistPointToHalfEdgeResults new_dist = distPointToHalfEdge(pvr.tri.p[2], he);
+
             if (!checkFence(pvr.tri.p[0], pvr.tri.p[2], he))
             {
-              result.type = TriangleToCloseTypes::FenceViolation;
-              result.dist = new_dist;
-              break;
+              if (result.type == TriangleToCloseTypes::None)
+              {
+                result.type = TriangleToCloseTypes::FenceViolation;
+                result.dist = new_dist;
+              }
+              else
+              {
+                if (new_dist.line < result.dist.line)
+                  result.dist = new_dist;
+              }
             }
-            else if (result.dist.line < pvr.gdr.l * 0.5)
+
+            if (result.type != TriangleToCloseTypes::FenceViolation && new_dist.line < pvr.gdr.l * 0.5)
             {
               if (result.type == TriangleToCloseTypes::None)
               {
@@ -551,9 +560,6 @@ namespace afront_meshing
             }
           }
         } while (++circ_oheav != circ_oheav_end);
-
-        if (result.type == TriangleToCloseTypes::FenceViolation)
-          break;
       }
 
       return result;
