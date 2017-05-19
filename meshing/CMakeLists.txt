@@ -41,6 +41,7 @@ include_directories(
 
 add_library(meshing
     src/afront_meshing.cpp
+    src/mls_sampling.cpp
 
 )
 
