@@ -9,7 +9,10 @@ else()
     set(CMAKE_CXX_EXTENSIONS ON)
 endif()
 
-find_package(catkin REQUIRED cmake_modules)
+# Enable Afront Debug Information
+add_definitions(-DAFRONTDEBUG)
+
+find_package(catkin REQUIRED cmake_modules roscpp)
 
 find_package(PCL 1.7 REQUIRED)
 
@@ -26,6 +29,8 @@ endif()
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES meshing
+  CATKIN_DEPENDS
+    roscpp
   DEPENDS
     Eigen
     PCL
@@ -42,13 +47,19 @@ include_directories(
 add_library(meshing
     src/afront_meshing.cpp
     src/mls_sampling.cpp
-
 )
 
 target_link_libraries(meshing
     ${catkin_LIBRARIES}
     ${PCL_LIBRARIES}
+)
 
+add_executable(afront_node src/afront_node.cpp)
+
+target_link_libraries(afront_node
+    ${catkin_LIBRARIES}
+    ${PCL_LIBRARIES}
+    meshing
 )
 
 catkin_add_gtest(${PROJECT_NAME}-test test/utest.cpp)

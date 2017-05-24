@@ -6,6 +6,7 @@
 #include <deque>
 
 #include <meshing/mls_sampling.h>
+#include <meshing/afront_utils.h>
 
 namespace afront_meshing
 {
@@ -99,13 +100,14 @@ namespace afront_meshing
       bool at_boundary;                   /**< @brief The predicted vertex is near the boundry of the point cloud */
     };
 
-    struct DistPointToHalfEdgeResults
-    {
-      HalfEdgeIndex he; /**< @brief The half edge index to check distance against. */
-      double line;      /**< @brief The minimum distance to the line segment. */
-      double start;     /**< @brief The distance to the line segment start point. */
-      double end;       /**< @brief The distance to the line segment end point. */
-    };
+//    struct DistPointToHalfEdgeResults
+//    {
+//      HalfEdgeIndex he;     /**< @brief The half edge index to check distance against. */
+//      Eigen::Vector3f p[2]; /**< @brief The half edge points (Origninating, Terminating) */
+//      double line;          /**< @brief The minimum distance to the line segment. */
+//      double start;         /**< @brief The distance to the line segment start point. */
+//      double end;           /**< @brief The distance to the line segment end point. */
+//    };
 
     struct CanCutEarResult
     {
@@ -143,10 +145,13 @@ namespace afront_meshing
         CloseProximity = 4,   /**< @brief The new triangle is in close proximity to another half edge. */
       };
 
-      TriangleToCloseTypes type;       /**< @brief The type of violation. */
-      PredictVertexResults pvr;        /**< @brief The predicted vertex information provided */
-      CanCutEarResults ccer;           /**< @brief The can cut ear results */
-      DistPointToHalfEdgeResults dist; /**< @brief This stores closest distance information */
+      HalfEdgeIndex he;                         /**< @brief The half edge index that is to close. */
+      VertexIndex closest;                      /**< @brief The closest mesh vertex. */
+      TriangleToCloseTypes type;                /**< @brief The type of violation. */
+      PredictVertexResults pvr;                 /**< @brief The predicted vertex information provided */
+      CanCutEarResults ccer;                    /**< @brief The can cut ear results */
+      utils::DistLine2LineResults dist;         /**< @brief This stores closest distance information. */
+      utils::IntersectionLine2PlaneResults lpr; /**< @brief The line to plane intersection results for fence violations. */
     };
 
   public:
@@ -177,8 +182,10 @@ namespace afront_meshing
     /** @brief Get the normals */
     pcl::PointCloud<pcl::Normal>::ConstPtr getNormals() const;
 
+    #ifdef AFRONTDEBUG
     /**  @brief Get the internal viewer */
     pcl::visualization::PCLVisualizer::Ptr getViewer() {return viewer_;}
+    #endif
 
     /** @brief Set the primary variable used to control mesh triangulation size */
     void setRho(double val){rho_ = val;}
@@ -321,7 +328,8 @@ namespace afront_meshing
     float getMaxCurvature(const std::vector<int> &indices) const;
 
     /** @brief Calculate the distance between a point and a half edge. */
-    DistPointToHalfEdgeResults distPointToHalfEdge(const Eigen::Vector3f p, const HalfEdgeIndex &half_edge) const;
+//    DistPointToHalfEdgeResults distPointToHalfEdge(const Eigen::Vector3f p, const HalfEdgeIndex &half_edge) const;
+    utils::DistLine2LineResults distLineToHalfEdge(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge) const;
 
     /**
     * @brief Calculate triangle information.
@@ -336,16 +344,21 @@ namespace afront_meshing
     * @param p1 Start point for line segment
     * @param p2 End point for line segment
     * @param half_edge Half edge for which to check for fence violation.
-    * @return False if the line segment intersects the half edge fence, otherwise True
+    * @return True if the line segment intersects the half edge fence, otherwise False
     */
-    bool checkFence(const Eigen::Vector3f p1, const Eigen::Vector3f p2, const HalfEdgeIndex &half_edge) const;
+    bool isFenceViolated(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge, utils::IntersectionLine2PlaneResults &lpr) const;
 
+    /** @brief Check if a point is in the grow direction of the front. */
+    bool isPointValid(const FrontData &front, const Eigen::Vector3f p, const bool limit = true) const;
+
+    #ifdef AFRONTDEBUG
     /**
      * @brief keyboardEventOccurred
      * @param event
      * @return
      */
     void keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*);
+    #endif
 
     // User defined data
     pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud_;
@@ -373,8 +386,11 @@ namespace afront_meshing
     bool finished_;
 
     // Debug
+    #ifdef AFRONTDEBUG
     std::uint64_t counter_;
+    mutable std::uint64_t fence_counter_;
     pcl::visualization::PCLVisualizer::Ptr viewer_;
+    #endif
   };
 } // namespace afront_meshing
 
