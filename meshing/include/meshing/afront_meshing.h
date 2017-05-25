@@ -349,7 +349,7 @@ namespace afront_meshing
     bool isFenceViolated(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge, utils::IntersectionLine2PlaneResults &lpr) const;
 
     /** @brief Check if a point is in the grow direction of the front. */
-    bool isPointValid(const FrontData &front, const Eigen::Vector3f p, const bool limit = true) const;
+    bool isPointValid(const FrontData &front, const Eigen::Vector3f p, bool limit = true) const;
 
     #ifdef AFRONTDEBUG
     /**

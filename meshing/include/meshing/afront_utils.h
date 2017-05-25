@@ -31,7 +31,7 @@ namespace utils
   * @param p2 Vectex of half edge
   * @return The lenght of the half edge
   */
-  double getEdgeLength(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2)
+  double distPoint2Point(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2)
   {
     return (p2-p1).norm();
   }
