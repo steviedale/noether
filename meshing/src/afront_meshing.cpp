@@ -141,23 +141,27 @@ namespace afront_meshing
       viewer_->removeShape("fence" + std::to_string(j));
     fence_counter_ = 0;
 
-//    // remove previouse iterations lines
-//    viewer_->removeShape("HalfEdge");
-//    viewer_->removeShape("NextHalfEdge");
-//    viewer_->removeShape("PrevHalfEdge");
+    // remove previouse iterations lines
+    viewer_->removeShape("HalfEdge");
+    viewer_->removeShape("NextHalfEdge");
+    viewer_->removeShape("PrevHalfEdge");
+    viewer_->removeShape("LeftSide");
+    viewer_->removeShape("RightSide");
+    viewer_->removeShape("Closest");
 
-//    pcl::PointXYZ p1, p2, p3, p4;
-//    p1 = utils::convertEigenToPCL(ccer.next.tri.p[0]);
-//    p2 = utils::convertEigenToPCL(ccer.next.tri.p[1]);
-//    p3 = utils::convertEigenToPCL(ccer.next.tri.p[2]);
-//    p4 = utils::convertEigenToPCL(ccer.prev.tri.p[2]);
 
-//    viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p1, p2, 0, 255, 0, "HalfEdge");       // Green
-//    viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p2, p3, 255, 0, 0, "NextHalfEdge");   // Red
-//    viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p1, p4, 255, 0, 255, "PrevHalfEdge"); // Magenta
-//    viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "HalfEdge");
-//    viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "NextHalfEdge");
-//    viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "PrevHalfEdge");
+    pcl::PointXYZ p1, p2, p3, p4;
+    p1 = utils::convertEigenToPCL(ccer.next.tri.p[0]);
+    p2 = utils::convertEigenToPCL(ccer.next.tri.p[1]);
+    p3 = utils::convertEigenToPCL(ccer.next.tri.p[2]);
+    p4 = utils::convertEigenToPCL(ccer.prev.tri.p[2]);
+
+    viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p1, p2, 0, 255, 0, "HalfEdge");       // Green
+    viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p2, p3, 255, 0, 0, "NextHalfEdge");   // Red
+    viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p1, p4, 255, 0, 255, "PrevHalfEdge"); // Magenta
+    viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "HalfEdge");
+    viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "NextHalfEdge");
+    viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "PrevHalfEdge");
     #endif
 
     if (ccer.type != CanCutEarResults::None)
@@ -180,6 +184,13 @@ namespace afront_meshing
       }
       else
       {
+        #ifdef AFRONTDEBUG
+        p3 = utils::convertEigenToPCL(pv.tri.p[2]);
+        viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p1, p3, 0, 255, 0, "RightSide");       // Green
+        viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p2, p3, 0, 255, 0, "LeftSide");        // Green
+        viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "RightSide");
+        viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "LeftSide");
+        #endif
         TriangleToCloseResults ttcr = isTriangleToClose(ccer, pv);
         if (ttcr.type == TriangleToCloseResults::None)
         {
@@ -288,9 +299,9 @@ namespace afront_meshing
     result.next.primary = front.he;
     result.next.secondary = getNextHalfEdge(front.he);
     result.next.valid = false;
-    result.next.vi.push_back(front.vi[0]);
-    result.next.vi.push_back(front.vi[1]);
-    result.next.vi.push_back(mesh_.getTerminatingVertexIndex(result.next.secondary));
+    result.next.vi[0] = front.vi[0];
+    result.next.vi[1] = front.vi[1];
+    result.next.vi[2] = mesh_.getTerminatingVertexIndex(result.next.secondary);
     p3 = (mesh_vertex_data_[result.next.vi[2].get()]).getVector3fMap();
     result.next.tri = getTriangleData(front, p3);
 
@@ -305,9 +316,9 @@ namespace afront_meshing
     result.prev.primary = front.he;
     result.prev.secondary = getPrevHalfEdge(front.he);
     result.prev.valid = false;
-    result.prev.vi.push_back(front.vi[0]);
-    result.prev.vi.push_back(front.vi[1]);
-    result.prev.vi.push_back(mesh_.getOriginatingVertexIndex(result.prev.secondary));
+    result.prev.vi[0] = front.vi[0];
+    result.prev.vi[1] = front.vi[1];
+    result.prev.vi[2] = mesh_.getOriginatingVertexIndex(result.prev.secondary);
     p3 = (mesh_vertex_data_[result.prev.vi[2].get()]).getVector3fMap();
     result.prev.tri = getTriangleData(front, p3);
 
@@ -471,9 +482,10 @@ namespace afront_meshing
     }
 
     // search for the nearest neighbor
-    pcl::PointXYZ search_pt(pvr.tri.p[2](0), pvr.tri.p[2](1), pvr.tri.p[2](2));
+    pcl::PointXYZ search_pt = utils::convertEigenToPCL(pvr.tri.p[2]);
     mesh_tree_->radiusSearch(search_pt, 3.0 * pvr.gdr.ideal, K, K_dist);
 
+    Eigen::Vector3f p = pvr.tri.p[2];
     check_fence.reserve(K.size());
     // First check for closest proximity violation
     for(auto i = 0; i < K.size(); ++i)
@@ -486,22 +498,31 @@ namespace afront_meshing
         HalfEdgeIndex he = mesh_.getOutgoingHalfEdgeIndex(vi);
         if (mesh_.isBoundary(he) && (he != pvr.front.he) && (he != ccer.prev.secondary) && (he != ccer.next.secondary))
         {
-          utils::DistLine2LineResults left_side = distLineToHalfEdge(pvr.tri.p[0], pvr.tri.p[2], he);
-          utils::DistLine2LineResults right_side = distLineToHalfEdge(pvr.tri.p[1], pvr.tri.p[2], he);
+          Eigen::Vector3f chkpt = mesh_vertex_data_[vi.get()].getVector3fMap();
+          Eigen::Vector3f endpt = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()].getVector3fMap();
+          utils::DistPoint2LineResults left_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
+          utils::DistPoint2LineResults right_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
 
-          // Need to make sure one of the half edge vertex is in front of the front
-          if (!isPointValid(ccer.front, left_side.points[2], false) && !isPointValid(ccer.front, left_side.points[3], false))
+          bool chkpt_valid = isPointValid(ccer.front, chkpt, false);
+          bool endpt_valid = isPointValid(ccer.front, endpt, false);
+
+          if (chkpt_valid || endpt_valid) // If either vertex is valid add as a valid fence check.
+          {
+            check_fence.push_back(he);
+
+            #ifdef AFRONTDEBUG
+            fence_counter_ += 1;
+            std::string fence_name = "fence" + std::to_string(fence_counter_);
+            viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(utils::convertEigenToPCL(chkpt), utils::convertEigenToPCL(endpt), 0, 255, 255, fence_name) ; // pink
+            viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, fence_name);
+            #endif
+          }
+          else if (!chkpt_valid || vi == ccer.prev.vi[2] || vi == ccer.next.vi[2]) // If the vertex is not valid or associated to either the previous or next half edge continue.
+          {
             continue;
+          }
 
-          #ifdef AFRONTDEBUG
-          fence_counter_ += 1;
-          std::string fence_name = "fence" + std::to_string(fence_counter_);
-          viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(utils::convertEigenToPCL(left_side.points[2]), utils::convertEigenToPCL(left_side.points[3]), 0, 255, 255, fence_name) ; // pink
-          viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, fence_name);
-          #endif
-
-          check_fence.push_back(he);
-          utils::DistLine2LineResults min_dist;
+          utils::DistPoint2LineResults min_dist;
           if (left_side.d < right_side.d)
             min_dist = left_side;
           else
@@ -514,46 +535,26 @@ namespace afront_meshing
             {
               result.type = TriangleToCloseResults::CloseProximity;
               result.dist = min_dist;
+              result.closest = vi;
+              p = chkpt;
             }
             else
             {
               if (min_dist.d < result.dist.d)
+              {
                 result.dist = min_dist;
+                result.closest = vi;
+                p = chkpt;
+              }
             }
           }
         }
       }
     }
 
-    // If in close proximity use new point for checking fence violation.
-    Eigen::Vector3f p = pvr.tri.p[2];
-    if (result.type == TriangleToCloseResults::CloseProximity)
-    {
-      bool vp1 = isPointValid(ccer.front, result.dist.points[2], false);
-      bool vp2 = isPointValid(ccer.front, result.dist.points[3], false);
-      assert(vp1 || vp2);
-      if (vp1 && vp2)
-        if (result.dist.mu[1] <= 0.5)
-        {
-          p = result.dist.points[2];
-          result.closest = mesh_.getOriginatingVertexIndex(result.he);
-        }
-        else
-        {
-          p = result.dist.points[3];
-          result.closest = mesh_.getTerminatingVertexIndex(result.he);
-        }
-      else if (vp1)
-      {
-        p = result.dist.points[2];
-        result.closest = mesh_.getOriginatingVertexIndex(result.he);
-      }
-      else
-      {
-        p = result.dist.points[3];
-        result.closest = mesh_.getTerminatingVertexIndex(result.he);
-      }
-    }
+    #ifdef AFRONTDEBUG
+    viewer_->addSphere(utils::convertEigenToPCL(p), rho_, 255, 255, 0, "Closest");
+    #endif
 
     // Now need to check for fence violation
     double dist;
@@ -562,8 +563,8 @@ namespace afront_meshing
     {
       utils::IntersectionLine2PlaneResults left_side;
       utils::IntersectionLine2PlaneResults right_side;
-      bool left_check = isFenceViolated(pvr.tri.p[0], p, check_fence[i], left_side);
-      bool right_check = isFenceViolated(pvr.tri.p[1], p, check_fence[i], right_side);
+      bool left_check = isFenceViolated(pvr.tri.p[1], p, check_fence[i], left_side);
+      bool right_check = isFenceViolated(pvr.tri.p[0], p, check_fence[i], right_side);
       utils::IntersectionLine2PlaneResults min_dist;
       if (left_check || right_check)
       {
@@ -696,9 +697,9 @@ namespace afront_meshing
 
     Eigen::Vector3f u = he_p2 - he_p1;
     Eigen::Vector3f v = fd.getNormalVector3fMap();
-    v = v.normalized() * 3 * rho_;
+    v = v.normalized() * rho_;
 
-    lpr = utils::intersectionLine2Plane(p1, p2, he_p2, u, v);
+    lpr = utils::intersectionLine2Plane(p1, p2, he_p1, u, v);
 
     if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
       if (lpr.mu <= 1 && lpr.mu >= 0)    // This checks if intersection point is within the x range of the plane

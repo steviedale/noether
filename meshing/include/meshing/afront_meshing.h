@@ -7,7 +7,7 @@
 
 #include <meshing/mls_sampling.h>
 #include <meshing/afront_utils.h>
-
+#define AFRONTDEBUG
 namespace afront_meshing
 {
   class AfrontMeshing
@@ -113,7 +113,7 @@ namespace afront_meshing
     {
       HalfEdgeIndex primary;   /**< @brief The advancing front half edge */
       HalfEdgeIndex secondary; /**< @brief The Secondary half edge triangle (Previouse or Next) */
-      VertexIndices vi;        /**< @brief The vertex indicies of the potential triangle */
+      VertexIndex vi[3];        /**< @brief The vertex indicies of the potential triangle */
       TriangleData tri;        /**< @brief The Triangle information */
       bool valid;              /**< @brief Whether the triangle meets the criteria */
     };
@@ -150,7 +150,7 @@ namespace afront_meshing
       TriangleToCloseTypes type;                /**< @brief The type of violation. */
       PredictVertexResults pvr;                 /**< @brief The predicted vertex information provided */
       CanCutEarResults ccer;                    /**< @brief The can cut ear results */
-      utils::DistLine2LineResults dist;         /**< @brief This stores closest distance information. */
+      utils::DistPoint2LineResults dist;         /**< @brief This stores closest distance information. */
       utils::IntersectionLine2PlaneResults lpr; /**< @brief The line to plane intersection results for fence violations. */
     };
 
