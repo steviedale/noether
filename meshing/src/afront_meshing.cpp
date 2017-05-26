@@ -458,28 +458,7 @@ namespace afront_meshing
     result.ccer = ccer;
     result.type = TriangleToCloseResults::None;
 
-    // Before checking fence violation lets check previous and next half edge and make sure there is not an issue.
-    // TODO: Need to improve such that two triangles get created for this case (ccer.next.tri.c <= 1.5708)
-    // TODO: Need to improve where a new triangle gets created while modify the other for this case (pvr.tri.c >= ccer.next.tri.c)
-    if (ccer.next.tri.valid)
-    {
-      double dist = (utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2])).d;
-      if (pvr.tri.c >= ccer.next.tri.c || ccer.next.tri.c <= 1.5708 || dist < 0.5 * pvr.gdr.l)
-      {
-        result.type = TriangleToCloseResults::NextHalfEdge;
-        return result;
-      }
-    }
 
-    if (ccer.prev.tri.valid)
-    {
-      double dist = (utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], ccer.prev.tri.p[2])).d;
-      if(pvr.tri.b >= ccer.prev.tri.b || ccer.prev.tri.b <= 1.5708 || dist < 0.5 * pvr.gdr.l)
-      {
-        result.type = TriangleToCloseResults::PrevHalfEdge;
-        return result;
-      }
-    }
 
     // search for the nearest neighbor
     pcl::PointXYZ search_pt = utils::convertEigenToPCL(pvr.tri.p[2]);
@@ -498,6 +477,7 @@ namespace afront_meshing
         HalfEdgeIndex he = mesh_.getOutgoingHalfEdgeIndex(vi);
         if (mesh_.isBoundary(he) && (he != pvr.front.he) && (he != ccer.prev.secondary) && (he != ccer.next.secondary))
         {
+          assert(vi == mesh_.getOriginatingVertexIndex(he));
           Eigen::Vector3f chkpt = mesh_vertex_data_[vi.get()].getVector3fMap();
           Eigen::Vector3f endpt = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()].getVector3fMap();
           utils::DistPoint2LineResults left_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
@@ -517,10 +497,9 @@ namespace afront_meshing
             viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, fence_name);
             #endif
           }
-          else if (!chkpt_valid || vi == ccer.prev.vi[2] || vi == ccer.next.vi[2]) // If the vertex is not valid or associated to either the previous or next half edge continue.
-          {
+
+          if (!chkpt_valid || vi == ccer.prev.vi[2] || vi == ccer.next.vi[2]) // If the vertex is not valid or associated to either the previous or next half edge continue.
             continue;
-          }
 
           utils::DistPoint2LineResults min_dist;
           if (left_side.d < right_side.d)
@@ -553,14 +532,45 @@ namespace afront_meshing
     }
 
     #ifdef AFRONTDEBUG
-    viewer_->addSphere(utils::convertEigenToPCL(p), rho_, 255, 255, 0, "Closest");
+    viewer_->addSphere(utils::convertEigenToPCL(p), 0.2 * pvr.gdr.l, 255, 255, 0, "Closest");
     #endif
+
+    if (result.type == TriangleToCloseResults::None)
+    {
+      // Before checking fence violation lets check previous and next half edge and make sure there is not an issue.
+      // TODO: Need to improve such that two triangles get created for this case (ccer.next.tri.c <= 1.5708)
+      // TODO: Need to improve where a new triangle gets created while modify the other for this case (pvr.tri.c >= ccer.next.tri.c)
+      if (ccer.next.tri.valid)
+      {
+  //      double dist = (utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2])).d;
+        if (pvr.tri.c >= ccer.next.tri.c || ccer.next.tri.c <= 1.5708)// || dist < 0.5 * pvr.gdr.l)
+        {
+          result.type = TriangleToCloseResults::NextHalfEdge;
+          return result;
+        }
+      }
+
+      if (ccer.prev.tri.valid)
+      {
+  //      double dist = (utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], ccer.prev.tri.p[2])).d;
+        if(pvr.tri.b >= ccer.prev.tri.b || ccer.prev.tri.b <= 1.5708)// || dist < 0.5 * pvr.gdr.l)
+        {
+          result.type = TriangleToCloseResults::PrevHalfEdge;
+          return result;
+        }
+      }
+    }
 
     // Now need to check for fence violation
     double dist;
     int fence_id;
     for(auto i = 0; i < check_fence.size(); ++i)
     {
+      // need to ignore fence check if closet is associated to the fence half edge
+      if (result.type != TriangleToCloseResults::None)
+        if (result.closest == mesh_.getOriginatingVertexIndex(check_fence[i]) || result.closest == mesh_.getTerminatingVertexIndex(check_fence[i]))
+          continue;
+
       utils::IntersectionLine2PlaneResults left_side;
       utils::IntersectionLine2PlaneResults right_side;
       bool left_check = isFenceViolated(pvr.tri.p[1], p, check_fence[i], left_side);
@@ -697,14 +707,15 @@ namespace afront_meshing
 
     Eigen::Vector3f u = he_p2 - he_p1;
     Eigen::Vector3f v = fd.getNormalVector3fMap();
-    v = v.normalized() * rho_;
+    v = v.normalized() * rho_; // Should the height of the fence be rho?
 
     lpr = utils::intersectionLine2Plane(p1, p2, he_p1, u, v);
 
-    if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
-      if (lpr.mu <= 1 && lpr.mu >= 0)    // This checks if intersection point is within the x range of the plane
-        if (lpr.mv <= 1 && lpr.mv >= -1) // This checks if intersection point is within the y range of the plane
-          return true;
+    if (!lpr.parallel) // May need to add additional check if parallel
+      if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
+        if (lpr.mu <= 1 && lpr.mu >= 0)    // This checks if intersection point is within the x range of the plane
+          if (lpr.mv <= 1 && lpr.mv >= -1) // This checks if intersection point is within the y range of the plane
+            return true;
 
     return false;
   }
