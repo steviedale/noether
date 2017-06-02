@@ -4,6 +4,8 @@
 #include <meshing/afront_meshing.h>
 #include <chrono>
 
+#include <pcl/io/pcd_io.h>
+
 namespace afront_meshing
 {
   AfrontMeshing::AfrontMeshing() : mesh_vertex_data_(mesh_.getVertexDataCloud())
@@ -29,6 +31,8 @@ namespace afront_meshing
       return false;
     }
 
+    pcl::io::savePCDFile("mls.pcd", *mls_cloud_);
+
     // Create first triangle
     createFirstTriangle(rand() % mls_cloud_->size());
 
@@ -44,14 +48,20 @@ namespace afront_meshing
 
     #ifdef AFRONTDEBUG
     viewer_ = pcl::visualization::PCLVisualizer::Ptr(new pcl::visualization::PCLVisualizer("3D Viewer"));
+    viewer_->addCoordinateSystem(1.0);
+    viewer_->initCameraParameters();
     viewer_->setBackgroundColor (0, 0, 0);
     viewer_->addPolygonMesh(getMesh());
 
+    int v1 = 0;
+    viewer_->createViewPort(0.0, 0.0, 0.5, 1.0, v1);
     pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> single_color(input_cloud_, 0, 255, 0);
-    viewer_->addPointCloud<pcl::PointXYZ> (input_cloud_, single_color, "sample cloud");
+    viewer_->addPointCloud<pcl::PointXYZ> (input_cloud_, single_color, "sample cloud", v1);
 
-    viewer_->addCoordinateSystem(1.0);
-    viewer_->initCameraParameters();
+    int v2 = 1;
+    viewer_->createViewPort(0.5, 0.0, 1.0, 1.0, v2);
+    viewer_->addPointCloud<pcl::PointNormal> (mls_cloud_, "mls_cloud", v2);
+
     viewer_->registerKeyboardCallback(&AfrontMeshing::keyboardEventOccurred, *this);
     viewer_->spin();
     #endif
@@ -164,7 +174,7 @@ namespace afront_meshing
     viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "PrevHalfEdge");
     #endif
 
-    if (ccer.type != CanCutEarResults::None)
+    if (ccer.type == CanCutEarResults::ClosedArea)
     {
       #ifdef AFRONTDEBUG
       std::printf("\x1B[34m  Performed Ear Cut Opperation\x1B[0m\n");
@@ -192,7 +202,7 @@ namespace afront_meshing
         viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "LeftSide");
         #endif
         TriangleToCloseResults ttcr = isTriangleToClose(ccer, pv);
-        if (ttcr.type == TriangleToCloseResults::None)
+        if (!ttcr.found)
         {
           #ifdef AFRONTDEBUG
           std::printf("\x1B[32m  Performed Grow Opperation\x1B[0m\n");
@@ -204,7 +214,8 @@ namespace afront_meshing
           #ifdef AFRONTDEBUG
           std::printf("\x1B[33m  Performed Topology Event Opperation\x1B[0m\n");
           #endif
-          topologyEvent(ttcr);
+          merge(ttcr);
+//          topologyEvent(ttcr);
         }
       }
     }
@@ -243,6 +254,8 @@ namespace afront_meshing
 
     // Get the allowed grow distance
     double d = 2 * std::sin(rho_/2) / sp.point.curvature;
+    if (d > 0.5) // Need to make the max edge size a parameter.
+      d = 0.5;
     GrowDistanceResults gdr = getGrowDistance(p1, d, d, d);
 
     // search for the nearest neighbor
@@ -447,25 +460,19 @@ namespace afront_meshing
     return result;
   }
 
-  AfrontMeshing::TriangleToCloseResults AfrontMeshing::isTriangleToClose(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const
+  AfrontMeshing::CloseProximityResults AfrontMeshing::isCloseProximity(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const
   {
-    TriangleToCloseResults result;
+    CloseProximityResults results;
     std::vector<int> K;
     std::vector<float> K_dist;
-    std::vector<HalfEdgeIndex> check_fence;
 
-    result.pvr = pvr;
-    result.ccer = ccer;
-    result.type = TriangleToCloseResults::None;
-
-
-
-    // search for the nearest neighbor
     pcl::PointXYZ search_pt = utils::convertEigenToPCL(pvr.tri.p[2]);
-    mesh_tree_->radiusSearch(search_pt, 3.0 * pvr.gdr.ideal, K, K_dist);
+    mesh_tree_->radiusSearch(search_pt, 3.0 * pvr.gdr.l, K, K_dist);
 
-    Eigen::Vector3f p = pvr.tri.p[2];
-    check_fence.reserve(K.size());
+    results.fences.reserve(K.size());
+    results.verticies.reserve(K.size());
+    results.found = false;
+
     // First check for closest proximity violation
     for(auto i = 0; i < K.size(); ++i)
     {
@@ -475,7 +482,7 @@ namespace afront_meshing
       if (mesh_.isBoundary(vi))
       {
         HalfEdgeIndex he = mesh_.getOutgoingHalfEdgeIndex(vi);
-        if (mesh_.isBoundary(he) && (he != pvr.front.he) && (he != ccer.prev.secondary) && (he != ccer.next.secondary))
+        if (mesh_.isBoundary(he) && (vi != pvr.front.vi[0]) && (vi != pvr.front.vi[1]))
         {
           assert(vi == mesh_.getOriginatingVertexIndex(he));
           Eigen::Vector3f chkpt = mesh_vertex_data_[vi.get()].getVector3fMap();
@@ -483,12 +490,12 @@ namespace afront_meshing
           utils::DistPoint2LineResults left_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
           utils::DistPoint2LineResults right_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
 
-          bool chkpt_valid = isPointValid(ccer.front, chkpt, false);
-          bool endpt_valid = isPointValid(ccer.front, endpt, false);
+          bool chkpt_valid = isPointValid(pvr.front, chkpt, false);
+          bool endpt_valid = isPointValid(pvr.front, endpt, false);
 
           if (chkpt_valid || endpt_valid) // If either vertex is valid add as a valid fence check.
           {
-            check_fence.push_back(he);
+            results.fences.push_back(he);
 
             #ifdef AFRONTDEBUG
             fence_counter_ += 1;
@@ -498,9 +505,10 @@ namespace afront_meshing
             #endif
           }
 
-          if (!chkpt_valid || vi == ccer.prev.vi[2] || vi == ccer.next.vi[2]) // If the vertex is not valid or associated to either the previous or next half edge continue.
+          if (!chkpt_valid)
             continue;
 
+          results.verticies.push_back(vi);
           utils::DistPoint2LineResults min_dist;
           if (left_side.d < right_side.d)
             min_dist = left_side;
@@ -509,21 +517,18 @@ namespace afront_meshing
 
           if (min_dist.d < 0.5 * pvr.gdr.l) //pvr.gdr.l
           {
-            result.he = he;
-            if (result.type == TriangleToCloseResults::None)
+            if (!results.found)
             {
-              result.type = TriangleToCloseResults::CloseProximity;
-              result.dist = min_dist;
-              result.closest = vi;
-              p = chkpt;
+              results.found = true;
+              results.dist = min_dist;
+              results.closest = vi;
             }
             else
             {
-              if (min_dist.d < result.dist.d)
+              if (min_dist.d < results.dist.d)
               {
-                result.dist = min_dist;
-                result.closest = vi;
-                p = chkpt;
+                results.dist = min_dist;
+                results.closest = vi;
               }
             }
           }
@@ -531,111 +536,209 @@ namespace afront_meshing
       }
     }
 
+    // TODO: Need to improve such that two triangles get created for this case (ccer.next.tri.c <= 1.5708)
+    // TODO: Need to improve where a new triangle gets created while modify the other for this case (pvr.tri.c >= ccer.next.tri.c)
+    if ((ccer.next.tri.valid && pvr.tri.c >= ccer.next.tri.c) && (ccer.prev.tri.valid && pvr.tri.b >= ccer.prev.tri.b))
+    {
+      if (ccer.next.tri.c < ccer.prev.tri.b)
+      {
+        results.closest = ccer.next.vi[2];
+        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
+        results.found = true;
+      }
+      else
+      {
+        results.closest = ccer.prev.vi[2];
+        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
+        results.found = true;
+      }
+    }
+    else if (ccer.next.tri.valid && pvr.tri.c >= ccer.next.tri.c)
+    {
+      results.closest = ccer.next.vi[2];
+      results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
+      results.found = true;
+    }
+    else if (ccer.prev.tri.valid && pvr.tri.b >= ccer.prev.tri.b)
+    {
+      results.closest = ccer.prev.vi[2];
+      results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
+      results.found = true;
+    }
+
+    if (!results.found || (results.found && results.closest != ccer.prev.vi[2] && results.closest != ccer.next.vi[2]))
+    {
+      if ((ccer.next.tri.valid && ccer.next.tri.c <= 1.5708) && (ccer.prev.tri.valid && ccer.prev.tri.b <= 1.5708))
+      {
+        if (ccer.next.tri.c < ccer.prev.tri.b)
+        {
+          results.closest = ccer.next.vi[2];
+          results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
+          results.found = true;
+        }
+        else
+        {
+          results.closest = ccer.prev.vi[2];
+          results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
+          results.found = true;
+        }
+      }
+      else if (ccer.next.tri.valid && ccer.next.tri.c <= 1.5708)
+      {
+        results.closest = ccer.next.vi[2];
+        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
+        results.found = true;
+      }
+      else if (ccer.prev.tri.valid && ccer.prev.tri.b <= 1.5708)
+      {
+        results.closest = ccer.prev.vi[2];
+        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
+        results.found = true;
+      }
+    }
+
     #ifdef AFRONTDEBUG
+    Eigen::Vector3f p;
+    p = pvr.tri.p[2];
+    if (results.found)
+      p = mesh_vertex_data_[results.closest.get()].getVector3fMap();
+
     viewer_->addSphere(utils::convertEigenToPCL(p), 0.2 * pvr.gdr.l, 255, 255, 0, "Closest");
     #endif
 
-    if (result.type == TriangleToCloseResults::None)
-    {
-      // Before checking fence violation lets check previous and next half edge and make sure there is not an issue.
-      // TODO: Need to improve such that two triangles get created for this case (ccer.next.tri.c <= 1.5708)
-      // TODO: Need to improve where a new triangle gets created while modify the other for this case (pvr.tri.c >= ccer.next.tri.c)
-      if (ccer.next.tri.valid)
-      {
-  //      double dist = (utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2])).d;
-        if (pvr.tri.c >= ccer.next.tri.c || ccer.next.tri.c <= 1.5708)// || dist < 0.5 * pvr.gdr.l)
-        {
-          result.type = TriangleToCloseResults::NextHalfEdge;
-          return result;
-        }
-      }
+    return results;
+  }
 
-      if (ccer.prev.tri.valid)
-      {
-  //      double dist = (utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], ccer.prev.tri.p[2])).d;
-        if(pvr.tri.b >= ccer.prev.tri.b || ccer.prev.tri.b <= 1.5708)// || dist < 0.5 * pvr.gdr.l)
-        {
-          result.type = TriangleToCloseResults::PrevHalfEdge;
-          return result;
-        }
-      }
-    }
-
+  AfrontMeshing::FenceViolationResults AfrontMeshing::isFenceViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const CloseProximityResults &cpr, const PredictVertexResults &pvr) const
+  {
     // Now need to check for fence violation
-    double dist;
-    int fence_id;
-    for(auto i = 0; i < check_fence.size(); ++i)
+    FenceViolationResults results;
+    results.found = false;
+    Eigen::Vector3f sp = mesh_vertex_data_[vi.get()].getVector3fMap();
+
+    for(auto i = 0; i < cpr.fences.size(); ++i)
     {
-      // need to ignore fence check if closet is associated to the fence half edge
-      if (result.type != TriangleToCloseResults::None)
-        if (result.closest == mesh_.getOriginatingVertexIndex(check_fence[i]) || result.closest == mesh_.getTerminatingVertexIndex(check_fence[i]))
+      // Need to ignore fence if either of its verticies are the same as the vi
+      if (vi == mesh_.getOriginatingVertexIndex(cpr.fences[i]) || vi == mesh_.getTerminatingVertexIndex(cpr.fences[i]))
+        continue;
+
+      // Need to ignore fence check if closet is associated to the fence half edge
+      if (cpr.found)
+        if (cpr.closest == mesh_.getOriginatingVertexIndex(cpr.fences[i]) || cpr.closest == mesh_.getTerminatingVertexIndex(cpr.fences[i]))
           continue;
 
-      utils::IntersectionLine2PlaneResults left_side;
-      utils::IntersectionLine2PlaneResults right_side;
-      bool left_check = isFenceViolated(pvr.tri.p[1], p, check_fence[i], left_side);
-      bool right_check = isFenceViolated(pvr.tri.p[0], p, check_fence[i], right_side);
-      utils::IntersectionLine2PlaneResults min_dist;
-      if (left_check || right_check)
-      {
-        result.he = check_fence[i];
-        double temp_dist;
-        if (left_check && right_check)
-        {
-          double left_dist = (left_side.mw * left_side.w).dot(pvr.front.d);
-          double right_dist = (right_side.mw * right_side.w).dot(pvr.front.d);
-          if (left_dist < right_dist)
-          {
-            min_dist = left_side;
-            temp_dist = left_dist;
-          }
-          else
-          {
-            min_dist = right_side;
-            temp_dist = right_dist;
-          }
-        }
-        else if (left_check)
-        {
-          min_dist = left_side;
-          temp_dist = (left_side.mw * left_side.w).dot(pvr.front.d);;
-        }
-        else
-        {
-          min_dist = right_side;
-          temp_dist = (right_side.mw * right_side.w).dot(pvr.front.d);
-        }
+      // Check for fence intersection
+      bool fence_violated = false;
+      Eigen::Vector3f he_p1, he_p2;
+      he_p1 = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(cpr.fences[i]).get()]).getVector3fMap();
+      he_p2 = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(cpr.fences[i]).get()]).getVector3fMap();
 
-        if (result.type != TriangleToCloseResults::FenceViolation)
+      MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(cpr.fences[i]).get()];
+
+      Eigen::Vector3f u = he_p2 - he_p1;
+      Eigen::Vector3f v = fd.getNormalVector3fMap();
+      v = v.normalized() * 3.0 * rho_; // Should the height of the fence be rho?
+
+      utils::IntersectionLine2PlaneResults lpr;
+      lpr = utils::intersectionLine2Plane(sp, p, he_p1, u, v);
+
+      if (!lpr.parallel) // May need to add additional check if parallel
+        if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
+          if (lpr.mu <= 1 && lpr.mu >= 0)    // This checks if intersection point is within the x range of the plane
+            if (lpr.mv <= 1 && lpr.mv >= -1) // This checks if intersection point is within the y range of the plane
+              fence_violated = true;
+
+      if (fence_violated)
+      {
+        double dist = (lpr.mw * lpr.w).dot(pvr.front.d);
+        if (!results.found)
         {
-          result.type = TriangleToCloseResults::FenceViolation;
-          result.lpr = min_dist;
-          dist = temp_dist;
-          fence_id = i;
+          results.he = cpr.fences[i];
+          results.index = i;
+          results.lpr = lpr;
+          results.dist = dist;
+          results.found = true;
         }
         else
         {
-          if (temp_dist < dist)
+          if (dist < results.dist)
           {
-            result.lpr = min_dist;
-            dist = temp_dist;
-            fence_id = i;
+            results.he = cpr.fences[i];
+            results.index = i;
+            results.lpr = lpr;
+            results.dist = dist;
           }
         }
       }
     }
 
-    if (result.type == TriangleToCloseResults::FenceViolation)
+    return results;
+  }
+
+  AfrontMeshing::TriangleToCloseResults AfrontMeshing::isTriangleToClose(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const
+  {
+    TriangleToCloseResults results;
+    results.ccer = ccer;
+    results.pvr = pvr;
+
+    // Check if new vertex is in close proximity to exising mesh verticies
+    CloseProximityResults cpr = isCloseProximity(ccer, pvr);
+    results.found = cpr.found;
+
+    // Check if any fences are violated.
+    FenceViolationResults fvr;
+    if (cpr.found && cpr.closest == ccer.prev.vi[2])
     {
+      results.closest = cpr.closest;
+      fvr = isFenceViolated(ccer.prev.vi[1], ccer.prev.tri.p[2], cpr, pvr);
+    }
+    else if (cpr.found && cpr.closest == ccer.next.vi[2])
+    {
+      results.closest = cpr.closest;
+      fvr = isFenceViolated(ccer.prev.vi[0], ccer.next.tri.p[2], cpr, pvr);
+    }
+    else
+    {
+      Eigen::Vector3f p = pvr.tri.p[2];
+      if (cpr.found)
+      {
+        results.closest = cpr.closest;
+        p = mesh_vertex_data_[cpr.closest.get()].getVector3fMap();
+      }
+
+      FenceViolationResults fvr1, fvr2, min_fvr;
+      fvr1 = isFenceViolated(ccer.front.vi[0], p, cpr, pvr);
+      fvr2 = isFenceViolated(ccer.front.vi[1], p, cpr, pvr);
+      if (fvr1.found && fvr2.found)
+      {
+        fvr = fvr1;
+        if (fvr2.dist < min_fvr.dist)
+          fvr = fvr2;
+      }
+      else if (fvr1.found)
+      {
+        fvr = fvr1;
+      }
+      else
+      {
+        fvr = fvr2;
+      }
+    }
+
+    if (fvr.found)
+    {
+      results.found = true;
+
       #ifdef AFRONTDEBUG
       assert(fence_counter_ != 0);
-      std::string fence_name = "fence" + std::to_string(fence_id + 1);
+      std::string fence_name = "fence" + std::to_string(fvr.index + 1);
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 255, 140, 0, fence_name);
       #endif
+
       VertexIndex fvi[2];
       Eigen::Vector3f fp[2];
-      fvi[0] = mesh_.getOriginatingVertexIndex(result.he);
-      fvi[1] = mesh_.getTerminatingVertexIndex(result.he);
+      fvi[0] = mesh_.getOriginatingVertexIndex(fvr.he);
+      fvi[1] = mesh_.getTerminatingVertexIndex(fvr.he);
       fp[0] = (mesh_vertex_data_[fvi[0].get()]).getVector3fMap();
       fp[1] = (mesh_vertex_data_[fvi[1].get()]).getVector3fMap();
 
@@ -643,17 +746,17 @@ namespace afront_meshing
       bool vp2 = isPointValid(ccer.front, fp[1], false);
       assert(vp1 || vp2);
       if (vp1 && vp2)
-        if (result.lpr.mu <= 0.5)
-          result.closest = mesh_.getOriginatingVertexIndex(result.he);
+        if (fvr.lpr.mu <= 0.5)
+          results.closest = mesh_.getOriginatingVertexIndex(fvr.he);
         else
-          result.closest = mesh_.getTerminatingVertexIndex(result.he);
+          results.closest = mesh_.getTerminatingVertexIndex(fvr.he);
       else if (vp1)
-        result.closest = mesh_.getOriginatingVertexIndex(result.he);
+        results.closest = mesh_.getOriginatingVertexIndex(fvr.he);
       else
-        result.closest = mesh_.getTerminatingVertexIndex(result.he);
+        results.closest = mesh_.getTerminatingVertexIndex(fvr.he);
     }
 
-    return result;
+    return results;
   }
 
   utils::DistLine2LineResults AfrontMeshing::distLineToHalfEdge(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge) const
@@ -661,63 +764,6 @@ namespace afront_meshing
     return utils::distLine2Line(p1, p2,
                                  (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap(),
                                  (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap());
-  }
-
-//  AfrontMeshing::DistPointToHalfEdgeResults AfrontMeshing::distPointToHalfEdge(const Eigen::Vector3f p, const HalfEdgeIndex &half_edge) const
-//  {
-//    DistPointToHalfEdgeResults results;
-
-//    results.he = half_edge;
-//    results.p[0] = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
-//    results.p[1] = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
-//    Eigen::Vector3f v = results.p[1] - results.p[0];
-//    Eigen::Vector3f w = p - results.p[0];
-
-//    double c1 = w.dot(v);
-//    double c2 = v.dot(v);
-//    results.start = utils::getEdgeLength(p, results.p[0]);
-//    results.end = utils::getEdgeLength(p, results.p[1]);
-
-//    if (c1 <= 0)
-//    {
-//      results.line = results.start;
-//    }
-//    else if (c2 <= c1)
-//    {
-//      results.line = results.end;
-//    }
-//    else
-//    {
-//      double b = c1 / c2;
-//      Eigen::Vector3f pb = results.p[0] + b * v;
-//      results.line = utils::getEdgeLength(p, pb);
-//    }
-
-//    return results;
-//  }
-
-  bool AfrontMeshing::isFenceViolated(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge, utils::IntersectionLine2PlaneResults &lpr) const
-  {
-    // Define parametric equation of fence plane
-    Eigen::Vector3f he_p1, he_p2;
-    he_p1 = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap();
-    he_p2 = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap();
-
-    MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(half_edge).get()];
-
-    Eigen::Vector3f u = he_p2 - he_p1;
-    Eigen::Vector3f v = fd.getNormalVector3fMap();
-    v = v.normalized() * rho_; // Should the height of the fence be rho?
-
-    lpr = utils::intersectionLine2Plane(p1, p2, he_p1, u, v);
-
-    if (!lpr.parallel) // May need to add additional check if parallel
-      if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
-        if (lpr.mu <= 1 && lpr.mu >= 0)    // This checks if intersection point is within the x range of the plane
-          if (lpr.mv <= 1 && lpr.mv >= -1) // This checks if intersection point is within the y range of the plane
-            return true;
-
-    return false;
   }
 
   bool AfrontMeshing::isPointValid(const FrontData &front, const Eigen::Vector3f p, bool limit) const
@@ -752,42 +798,6 @@ namespace afront_meshing
     addToQueue(getPrevHalfEdge(ccer.next.secondary));
   }
 
-  void AfrontMeshing::topologyEvent(const TriangleToCloseResults &ttcr)
-  {
-    if (ttcr.type == TriangleToCloseResults::PrevHalfEdge)
-    {
-      #ifdef AFRONTDEBUG
-      std::printf("\x1B[32m\tForced Ear Cut Opperation with Previous Half Edge!\x1B[0m\n");
-      #endif
-      CanCutEarResults force = ttcr.ccer;
-      force.type = CanCutEarResults::PrevHalfEdge;
-      cutEar(force);
-    }
-    else if (ttcr.type == TriangleToCloseResults::NextHalfEdge)
-    {
-      #ifdef AFRONTDEBUG
-      std::printf("\x1B[32m\tForced Ear Cut Opperation with Previous Half Edge!\x1B[0m\n");
-      #endif
-      CanCutEarResults force = ttcr.ccer;
-      force.type = CanCutEarResults::NextHalfEdge;
-      cutEar(force);
-    }
-    else if (ttcr.type == TriangleToCloseResults::CloseProximity)
-    {
-      #ifdef AFRONTDEBUG
-      std::printf("\x1B[31m\tMerging triangle due to CloseProximity!\x1B[0m\n");
-      #endif
-      merge(ttcr);
-    }
-    else if (ttcr.type == TriangleToCloseResults::FenceViolation)
-    {
-      #ifdef AFRONTDEBUG
-      std::printf("\x1B[31m\tMerging triangle due to FenceViolation!\x1B[0m\n");
-      #endif
-      merge(ttcr);
-    }
-  }
-
   void AfrontMeshing::merge(const TriangleToCloseResults &ttcr)
   {
     assert(ttcr.closest != mesh_.getTerminatingVertexIndex(ttcr.ccer.prev.secondary));
@@ -796,7 +806,7 @@ namespace afront_meshing
     if (ttcr.closest == mesh_.getOriginatingVertexIndex(ttcr.ccer.prev.secondary))
     {
       #ifdef AFRONTDEBUG
-      std::printf("\x1B[32m\t\tAborting Merge, Forced Ear Cut Opperation with Previous Half Edge!\x1B[0m\n");
+      std::printf("\x1B[32m\tAborting Merge, Forced Ear Cut Opperation with Previous Half Edge!\x1B[0m\n");
       #endif
       CanCutEarResults force = ttcr.ccer;
       force.type = CanCutEarResults::PrevHalfEdge;
@@ -806,7 +816,7 @@ namespace afront_meshing
     else if (ttcr.closest == mesh_.getTerminatingVertexIndex(ttcr.ccer.next.secondary))
     {
       #ifdef AFRONTDEBUG
-      std::printf("\x1B[32m\t\tAborting Merge, Forced Ear Cut Opperation with Next Half Edge!\x1B[0m\n");
+      std::printf("\x1B[32m\tAborting Merge, Forced Ear Cut Opperation with Next Half Edge!\x1B[0m\n");
       #endif
       CanCutEarResults force = ttcr.ccer;
       force.type = CanCutEarResults::NextHalfEdge;
@@ -853,7 +863,7 @@ namespace afront_meshing
     pn.x = mp(0);
     pn.y = mp(1);
     pn.z = mp(2);
-    int cnt = mls_cloud_tree_->radiusSearch(pn, reduction_ * max_length, gdr.k, gdr.k_dist);
+    int cnt = mls_cloud_tree_->radiusSearch(pn, 3 * reduction_ * max_length, gdr.k, gdr.k_dist);
     gdr.valid = false;
     gdr.max_curv = getMaxCurvature(gdr.k);
     if (cnt > 0)
@@ -863,49 +873,48 @@ namespace afront_meshing
       double estimated = rho_ / gdr.max_curv;
       double max = min_length * reduction_;
       double min = max_length / reduction_;
-      if (estimated > gdr.ideal)
-        estimated = gdr.ideal;
+//      if (estimated > gdr.ideal)
+//        estimated = gdr.ideal;
 
-      if (estimated > edge_length)
+//      if (estimated > edge_length)
+//      {
+//        double ratio = estimated / edge_length;
+//        if (ratio > reduction_)
+//          estimated = reduction_ * edge_length;
+
+//      }
+//      else
+//      {
+//        double ratio = edge_length / estimated;
+//        if (ratio > reduction_)
+//          estimated = edge_length / reduction_;
+//      }
+      if (min < max)
       {
-        double ratio = estimated / edge_length;
-        if (ratio > reduction_)
-          estimated = reduction_ * edge_length;
-
+        if (estimated < min)
+          estimated = min;
+        else if (estimated > max)
+          estimated = max;
       }
       else
       {
-        double ratio = edge_length / estimated;
-        if (ratio > reduction_)
-          estimated = edge_length / reduction_;
+        if (estimated > edge_length)
+        {
+          double ratio = estimated / edge_length;
+          if (ratio > reduction_)
+            estimated = reduction_ * edge_length;
+
+        }
+        else
+        {
+          double ratio = edge_length / estimated;
+          if (ratio > reduction_)
+            estimated = edge_length / reduction_;
+        }
       }
 
       gdr.estimated = estimated;
       gdr.l = std::sqrt(pow(estimated, 2.0) - pow(edge_length / 2.0, 2.0));
-
-      //      if (min < max)
-      //      {
-      //        if (estimated < min)
-      //          estimated = min;
-      //        else if (estimated > max)
-      //          estimated = max;
-      //      }
-      //      else
-      //      {
-      //        if (estimated > edge_length)
-      //        {
-      //          double ratio = estimated / edge_length;
-      //          if (ratio > reduction_)
-      //            estimated = reduction_ * edge_length;
-
-      //        }
-      //        else
-      //        {
-      //          double ratio = edge_length / estimated;
-      //          if (ratio > reduction_)
-      //            estimated = edge_length / reduction_;
-      //        }
-      //      }
     }
 
     return gdr;
@@ -1142,6 +1151,20 @@ namespace afront_meshing
 
         viewer_->removePolygonMesh();
         viewer_->addPolygonMesh(getMesh());
+      }
+    }
+
+    if (event.getKeySym() == "m" && event.keyDown())
+    {
+      if (!isFinished())
+      {
+        for (auto i = 0; i < 25; ++i)
+        {
+          stepMesh();
+
+          viewer_->removePolygonMesh();
+          viewer_->addPolygonMesh(getMesh());
+        }
       }
     }
   }

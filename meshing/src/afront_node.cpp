@@ -1,6 +1,7 @@
 #include <ros/ros.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/io/ply_io.h>
+#include <pcl/filters/filter.h>
 #include <meshing/afront_meshing.h>
 
 int main(int argc, char **argv)
@@ -13,6 +14,7 @@ int main(int argc, char **argv)
   double quality;
   double radius;
   bool snap;
+  int sample;
 
   if (nh.hasParam("pcd_file"))
   {
@@ -40,6 +42,7 @@ int main(int argc, char **argv)
   nh.param<double>("rho", rho, 0.5);
   nh.param<double>("radius", radius, 0.1);
   nh.param<bool>("snap", snap, false);
+  nh.param<int>("sample", sample, 0);
   nh.param<double>("quality", quality, 1.2);
   if (quality < 1)
   {
@@ -47,7 +50,7 @@ int main(int argc, char **argv)
     return 0;
   }
 
-  pcl::PointCloud<pcl::PointXYZ> cloud;
+  pcl::PointCloud<pcl::PointXYZ> cloud, filtered_cloud;
   afront_meshing::AfrontMeshing mesher;
   if (pcl::io::loadPCDFile<pcl::PointXYZ>(pcd_file, cloud) == -1) //* load the file
   {
@@ -55,16 +58,26 @@ int main(int argc, char **argv)
     return 0;
   }
 
-  pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(cloud));
+  std::vector<int> indices;
+  pcl::removeNaNFromPointCloud(cloud, filtered_cloud, indices);
+
+  pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(filtered_cloud));
   mesher.setRho(rho);
   mesher.setTriangleQuality(quality);
   mesher.setRadius(radius);
   mesher.enableSnap(snap);
 
-  if(mesher.initMesher(in_cloud))
-    mesher.generateMesh();
+  sleep(8);
+  if (mesher.initMesher(in_cloud))
+  {
+    if (sample == 0)
+      mesher.generateMesh();
+    else
+      for (auto i = 0; i < sample; ++i)
+        mesher.stepMesh();
 
-  pcl::io::savePLYFile(ply_file, mesher.getMesh());
+    pcl::io::savePLYFile(ply_file, mesher.getMesh());
+  }
 
   return 0;
 }

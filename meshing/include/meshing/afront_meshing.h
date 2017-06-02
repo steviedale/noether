@@ -100,15 +100,6 @@ namespace afront_meshing
       bool at_boundary;                   /**< @brief The predicted vertex is near the boundry of the point cloud */
     };
 
-//    struct DistPointToHalfEdgeResults
-//    {
-//      HalfEdgeIndex he;     /**< @brief The half edge index to check distance against. */
-//      Eigen::Vector3f p[2]; /**< @brief The half edge points (Origninating, Terminating) */
-//      double line;          /**< @brief The minimum distance to the line segment. */
-//      double start;         /**< @brief The distance to the line segment start point. */
-//      double end;           /**< @brief The distance to the line segment end point. */
-//    };
-
     struct CanCutEarResult
     {
       HalfEdgeIndex primary;   /**< @brief The advancing front half edge */
@@ -134,24 +125,30 @@ namespace afront_meshing
       CanCutEarResult next;       /**< @brief The results using the next half edge */
     };
 
+    struct CloseProximityResults
+    {
+      std::vector<VertexIndex> verticies; /**< @brief The valid mesh verticies. */
+      std::vector<HalfEdgeIndex> fences;  /**< @brief The valid half edges. */
+      VertexIndex closest;                /**< @brief The closest mesh vertex */
+      utils::DistPoint2LineResults dist;  /**< @brief This stores closest distance information. */
+      bool found;                         /**< @brief If close proximity was found. */
+    };
+
+    struct FenceViolationResults
+    {
+      HalfEdgeIndex he;                         /**< @brief The half edge index that was violated. */
+      int index;                                /**< @brief The index in the array CloseProximityResults.fences. */
+      utils::IntersectionLine2PlaneResults lpr; /**< @brief The line to plane intersection results for fence violations. */
+      double dist;                              /**< @brief The distance from the intersection point and the advancing front. */
+      bool found;                               /**< @brief If a mesh half edge was violated. */
+    };
+
     struct TriangleToCloseResults
     {
-      enum TriangleToCloseTypes
-      {
-        None = 0,             /**< @brief There is no violation */
-        PrevHalfEdge = 1,     /**< @brief The new triangle interfereces with the previous half edge. */
-        NextHalfEdge = 2,     /**< @brief The new triangle interfereces with the next half edge. */
-        FenceViolation = 3,   /**< @brief The new triangle violates another half edges fence. */
-        CloseProximity = 4,   /**< @brief The new triangle is in close proximity to another half edge. */
-      };
-
-      HalfEdgeIndex he;                         /**< @brief The half edge index that is to close. */
-      VertexIndex closest;                      /**< @brief The closest mesh vertex. */
-      TriangleToCloseTypes type;                /**< @brief The type of violation. */
       PredictVertexResults pvr;                 /**< @brief The predicted vertex information provided */
       CanCutEarResults ccer;                    /**< @brief The can cut ear results */
-      utils::DistPoint2LineResults dist;         /**< @brief This stores closest distance information. */
-      utils::IntersectionLine2PlaneResults lpr; /**< @brief The line to plane intersection results for fence violations. */
+      VertexIndex closest;
+      bool found;
     };
 
   public:
@@ -215,6 +212,10 @@ namespace afront_meshing
     /** @brief Get the predicted vertex for the provided front */
     PredictVertexResults predictVertex(const FrontData &front) const;
 
+    CloseProximityResults isCloseProximity(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const;
+
+    FenceViolationResults isFenceViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const CloseProximityResults &cpr, const PredictVertexResults &pvr) const;
+
     /** @brief Check if the proposed triangle is to close to the existing mesh. */
     TriangleToCloseResults isTriangleToClose(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const;
 
@@ -225,7 +226,7 @@ namespace afront_meshing
     void merge(const TriangleToCloseResults &ttcr);
 
     /** @brief Perform a topology event. This may modify the existing mesh to create quality triangles */
-    void topologyEvent(const TriangleToCloseResults &ttcr);
+//    void topologyEvent(const TriangleToCloseResults &ttcr);
 
     /** @brief Perform an ear cut operation */
     void cutEar(const CanCutEarResults &ccer);
@@ -338,15 +339,6 @@ namespace afront_meshing
     * @return Returns information about the triangle: angles, edge lengths, etc.
     */
     TriangleData getTriangleData(const FrontData &front, const Eigen::Vector3f p3) const;
-
-    /**
-    * @brief Check if a line segment intersects a half edge fence.
-    * @param p1 Start point for line segment
-    * @param p2 End point for line segment
-    * @param half_edge Half edge for which to check for fence violation.
-    * @return True if the line segment intersects the half edge fence, otherwise False
-    */
-    bool isFenceViolated(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge, utils::IntersectionLine2PlaneResults &lpr) const;
 
     /** @brief Check if a point is in the grow direction of the front. */
     bool isPointValid(const FrontData &front, const Eigen::Vector3f p, bool limit = true) const;
