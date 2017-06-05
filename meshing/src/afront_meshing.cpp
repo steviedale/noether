@@ -463,78 +463,150 @@ namespace afront_meshing
   AfrontMeshing::CloseProximityResults AfrontMeshing::isCloseProximity(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const
   {
     CloseProximityResults results;
-    std::vector<int> K;
-    std::vector<float> K_dist;
+//    std::vector<int> K;
+//    std::vector<float> K_dist;
 
-    pcl::PointXYZ search_pt = utils::convertEigenToPCL(pvr.tri.p[2]);
-    mesh_tree_->radiusSearch(search_pt, 3.0 * pvr.gdr.l, K, K_dist);
+//    pcl::PointXYZ search_pt = utils::convertEigenToPCL(pvr.tri.p[2]);
+//    mesh_tree_->radiusSearch(search_pt, 3.0 * pvr.gdr.l, K, K_dist);
 
-    results.fences.reserve(K.size());
-    results.verticies.reserve(K.size());
+//    results.fences.reserve(K.size());
+//    results.verticies.reserve(K.size());
+//    results.found = false;
+
+//    // First check for closest proximity violation
+//    for(auto i = 0; i < K.size(); ++i)
+//    {
+//      MeshTraits::VertexData &data = mesh_vertex_data_.at(K[i]);
+//      VertexIndex vi = mesh_.getVertexIndex(data);
+
+//      if (mesh_.isBoundary(vi))
+//      {
+//        HalfEdgeIndex he = mesh_.getOutgoingHalfEdgeIndex(vi);
+//        if (mesh_.isBoundary(he) && (vi != pvr.front.vi[0]) && (vi != pvr.front.vi[1]))
+//        {
+//          assert(vi == mesh_.getOriginatingVertexIndex(he));
+//          Eigen::Vector3f chkpt = mesh_vertex_data_[vi.get()].getVector3fMap();
+//          Eigen::Vector3f endpt = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()].getVector3fMap();
+//          utils::DistPoint2LineResults left_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
+//          utils::DistPoint2LineResults right_side = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], chkpt);
+
+//          bool chkpt_valid = isPointValid(pvr.front, chkpt, false);
+//          bool endpt_valid = isPointValid(pvr.front, endpt, false);
+
+//          if (chkpt_valid || endpt_valid) // If either vertex is valid add as a valid fence check.
+//          {
+//            results.fences.push_back(he);
+
+//            #ifdef AFRONTDEBUG
+//            fence_counter_ += 1;
+//            std::string fence_name = "fence" + std::to_string(fence_counter_);
+//            viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(utils::convertEigenToPCL(chkpt), utils::convertEigenToPCL(endpt), 0, 255, 255, fence_name) ; // pink
+//            viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, fence_name);
+//            #endif
+//          }
+
+//          if (!chkpt_valid)
+//            continue;
+
+//          results.verticies.push_back(vi);
+//          utils::DistPoint2LineResults min_dist;
+//          if (left_side.d < right_side.d)
+//            min_dist = left_side;
+//          else
+//            min_dist = right_side;
+
+//          if (min_dist.d < 0.5 * pvr.gdr.l) //pvr.gdr.l
+//          {
+//            if (!results.found)
+//            {
+//              results.found = true;
+//              results.dist = min_dist;
+//              results.closest = vi;
+//            }
+//            else
+//            {
+//              if (min_dist.d < results.dist.d)
+//              {
+//                results.dist = min_dist;
+//                results.closest = vi;
+//              }
+//            }
+//          }
+//        }
+//      }
+//    }
+
+
+    int lqueue = queue_.size();
+    int lboundary = boundary_.size();
+    int fronts = lqueue + lboundary;
+
+    results.fences.reserve(fronts);
+    results.verticies.reserve(fronts);
     results.found = false;
 
-    // First check for closest proximity violation
-    for(auto i = 0; i < K.size(); ++i)
+    for(auto i = 0; i < fronts; ++i)
     {
-      MeshTraits::VertexData &data = mesh_vertex_data_.at(K[i]);
-      VertexIndex vi = mesh_.getVertexIndex(data);
+      HalfEdgeIndex he;
+      if (i < lqueue)
+        he = queue_[i];
+      else
+        he = boundary_[i-lqueue];
 
-      if (mesh_.isBoundary(vi))
+      VertexIndex vi[2];
+      vi[0] = mesh_.getOriginatingVertexIndex(he);
+      vi[1] = mesh_.getTerminatingVertexIndex(he);
+
+      Eigen::Vector3f chkpt = mesh_vertex_data_[vi[0].get()].getVector3fMap();
+      Eigen::Vector3f endpt = mesh_vertex_data_[vi[1].get()].getVector3fMap();
+
+      bool chkpt_valid = isPointValid(pvr.front, chkpt, false) && (utils::distPoint2Point(pvr.tri.p[2], chkpt) < 3.0 * pvr.gdr.l);
+      bool endpt_valid = isPointValid(pvr.front, endpt, false) && (utils::distPoint2Point(pvr.tri.p[2], endpt) < 3.0 * pvr.gdr.l);
+
+      if (chkpt_valid || endpt_valid) // If either vertex is valid add as a valid fence check.
       {
-        HalfEdgeIndex he = mesh_.getOutgoingHalfEdgeIndex(vi);
-        if (mesh_.isBoundary(he) && (vi != pvr.front.vi[0]) && (vi != pvr.front.vi[1]))
+        results.fences.push_back(he);
+
+        #ifdef AFRONTDEBUG
+        fence_counter_ += 1;
+        std::string fence_name = "fence" + std::to_string(fence_counter_);
+        viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(utils::convertEigenToPCL(chkpt), utils::convertEigenToPCL(endpt), 0, 255, 255, fence_name) ; // pink
+        viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, fence_name);
+        #endif
+      }
+
+      if (!chkpt_valid)
+        continue;
+
+      utils::DistPoint2LineResults left_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
+      utils::DistPoint2LineResults right_side = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], chkpt);
+
+      results.verticies.push_back(vi[0]);
+      utils::DistPoint2LineResults min_dist;
+      if (left_side.d < right_side.d)
+        min_dist = left_side;
+      else
+        min_dist = right_side;
+
+      if (min_dist.d < 0.5 * pvr.gdr.l) //pvr.gdr.l
+      {
+        if (!results.found)
         {
-          assert(vi == mesh_.getOriginatingVertexIndex(he));
-          Eigen::Vector3f chkpt = mesh_vertex_data_[vi.get()].getVector3fMap();
-          Eigen::Vector3f endpt = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()].getVector3fMap();
-          utils::DistPoint2LineResults left_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
-          utils::DistPoint2LineResults right_side = utils::distPoint2Line(pvr.tri.p[0], pvr.tri.p[2], chkpt);
-
-          bool chkpt_valid = isPointValid(pvr.front, chkpt, false);
-          bool endpt_valid = isPointValid(pvr.front, endpt, false);
-
-          if (chkpt_valid || endpt_valid) // If either vertex is valid add as a valid fence check.
+          results.found = true;
+          results.dist = min_dist;
+          results.closest = vi[0];
+        }
+        else
+        {
+          if (min_dist.d < results.dist.d)
           {
-            results.fences.push_back(he);
-
-            #ifdef AFRONTDEBUG
-            fence_counter_ += 1;
-            std::string fence_name = "fence" + std::to_string(fence_counter_);
-            viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(utils::convertEigenToPCL(chkpt), utils::convertEigenToPCL(endpt), 0, 255, 255, fence_name) ; // pink
-            viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, fence_name);
-            #endif
-          }
-
-          if (!chkpt_valid)
-            continue;
-
-          results.verticies.push_back(vi);
-          utils::DistPoint2LineResults min_dist;
-          if (left_side.d < right_side.d)
-            min_dist = left_side;
-          else
-            min_dist = right_side;
-
-          if (min_dist.d < 0.5 * pvr.gdr.l) //pvr.gdr.l
-          {
-            if (!results.found)
-            {
-              results.found = true;
-              results.dist = min_dist;
-              results.closest = vi;
-            }
-            else
-            {
-              if (min_dist.d < results.dist.d)
-              {
-                results.dist = min_dist;
-                results.closest = vi;
-              }
-            }
+            results.dist = min_dist;
+            results.closest = vi[0];
           }
         }
       }
     }
+
 
     // TODO: Need to improve such that two triangles get created for this case (ccer.next.tri.c <= 1.5708)
     // TODO: Need to improve where a new triangle gets created while modify the other for this case (pvr.tri.c >= ccer.next.tri.c)
@@ -566,36 +638,36 @@ namespace afront_meshing
       results.found = true;
     }
 
-    if (!results.found || (results.found && results.closest != ccer.prev.vi[2] && results.closest != ccer.next.vi[2]))
-    {
-      if ((ccer.next.tri.valid && ccer.next.tri.c <= 1.5708) && (ccer.prev.tri.valid && ccer.prev.tri.b <= 1.5708))
-      {
-        if (ccer.next.tri.c < ccer.prev.tri.b)
-        {
-          results.closest = ccer.next.vi[2];
-          results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
-          results.found = true;
-        }
-        else
-        {
-          results.closest = ccer.prev.vi[2];
-          results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
-          results.found = true;
-        }
-      }
-      else if (ccer.next.tri.valid && ccer.next.tri.c <= 1.5708)
-      {
-        results.closest = ccer.next.vi[2];
-        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
-        results.found = true;
-      }
-      else if (ccer.prev.tri.valid && ccer.prev.tri.b <= 1.5708)
-      {
-        results.closest = ccer.prev.vi[2];
-        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
-        results.found = true;
-      }
-    }
+//    if (!results.found || (results.found && results.closest != ccer.prev.vi[2] && results.closest != ccer.next.vi[2]))
+//    {
+//      if ((ccer.next.tri.valid && ccer.next.tri.c <= 1.5708) && (ccer.prev.tri.valid && ccer.prev.tri.b <= 1.5708))
+//      {
+//        if (ccer.next.tri.c < ccer.prev.tri.b)
+//        {
+//          results.closest = ccer.next.vi[2];
+//          results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
+//          results.found = true;
+//        }
+//        else
+//        {
+//          results.closest = ccer.prev.vi[2];
+//          results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
+//          results.found = true;
+//        }
+//      }
+//      else if (ccer.next.tri.valid && ccer.next.tri.c <= 1.5708)
+//      {
+//        results.closest = ccer.next.vi[2];
+//        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.next.tri.p[2]);
+//        results.found = true;
+//      }
+//      else if (ccer.prev.tri.valid && ccer.prev.tri.b <= 1.5708)
+//      {
+//        results.closest = ccer.prev.vi[2];
+//        results.dist = utils::distPoint2Line(pvr.tri.p[1], pvr.tri.p[2], ccer.prev.tri.p[2]);
+//        results.found = true;
+//      }
+//    }
 
     #ifdef AFRONTDEBUG
     Eigen::Vector3f p;
