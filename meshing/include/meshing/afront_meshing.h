@@ -88,11 +88,35 @@ namespace afront_meshing
       Eigen::Vector3f d;       /**< @brief The half edge grow direction */
       VertexIndex vi[2];       /**< @brief The half edge vertex indicies */
       Eigen::Vector3f p[2];    /**< @brief The half edge points (Origninating, Terminating) */
+
+    };
+
+    struct CutEarData
+    {
+      enum CutEarDataTypes
+      {
+        PrevHalfEdge = 0,     /**< @brief Can cut ear results with previous half edge. */
+        NextHalfEdge = 1,     /**< @brief Can cut ear results with next half edge. */
+      };
+
+      CutEarDataTypes type;    /**< @brief Identifies whether generated using previous or next half edge */
+      HalfEdgeIndex primary;   /**< @brief The advancing front half edge */
+      HalfEdgeIndex secondary; /**< @brief The Secondary half edge triangle (Previouse or Next) */
+      VertexIndex vi[3];       /**< @brief The vertex indicies of the potential triangle */
+      TriangleData tri;        /**< @brief The Triangle information */
+      bool valid;              /**< @brief Whether the triangle meets the criteria */
+    };
+
+    struct AdvancingFrontData
+    {
+      FrontData front;    /**< @brief The front data */
+      CutEarData prev;    /**< @brief The results using the previous half edge */
+      CutEarData next;    /**< @brief The results using the next half edge */
     };
 
     struct PredictVertexResults
     {
-      FrontData front;                    /**< @brief Advancing front data */
+      AdvancingFrontData afront;          /**< @brief Advancing front data */
       GrowDistanceResults gdr;            /**< @brief Allowed grow distance */
       TriangleData tri;                   /**< @brief The proposed triangle data */
       MLSSampling::SamplePointResults pv; /**< @brief The predicted point projected on the mls surface */
@@ -100,37 +124,30 @@ namespace afront_meshing
       bool at_boundary;                   /**< @brief The predicted vertex is near the boundry of the point cloud */
     };
 
-    struct CanCutEarResult
-    {
-      HalfEdgeIndex primary;   /**< @brief The advancing front half edge */
-      HalfEdgeIndex secondary; /**< @brief The Secondary half edge triangle (Previouse or Next) */
-      VertexIndex vi[3];        /**< @brief The vertex indicies of the potential triangle */
-      TriangleData tri;        /**< @brief The Triangle information */
-      bool valid;              /**< @brief Whether the triangle meets the criteria */
-    };
 
-    struct CanCutEarResults
-    {
-      enum CanCutEarResultTypes
-      {
-        None = 0,             /**< @brief Can not perform ear cut operation. */
-        PrevHalfEdge = 1,     /**< @brief Can cut ear with previous half edge. */
-        NextHalfEdge = 2,     /**< @brief Can cut ear with next half edge. */
-        ClosedArea = 3,       /**< @brief The front, previous and next half edge create a triangle. */
-      };
+//    struct CanCutEarResults
+//    {
+//      enum CanCutEarResultTypes
+//      {
+//        None = 0,             /**< @brief Can not perform ear cut operation. */
+//        PrevHalfEdge = 1,     /**< @brief Can cut ear with previous half edge. */
+//        NextHalfEdge = 2,     /**< @brief Can cut ear with next half edge. */
+//        ClosedArea = 3,       /**< @brief The front, previous and next half edge create a triangle. */
+//      };
 
-      CanCutEarResultTypes type;  /**< @brief The type of cut ear operation. */
-      FrontData front;            /**< @brief Advancing front data */
-      CanCutEarResult prev;       /**< @brief The results using the previous half edge */
-      CanCutEarResult next;       /**< @brief The results using the next half edge */
-    };
+//      CanCutEarResultTypes type;  /**< @brief The type of cut ear operation. */
+//      FrontData front;            /**< @brief Advancing front data */
+//      CanCutEarResult prev;       /**< @brief The results using the previous half edge */
+//      CanCutEarResult next;       /**< @brief The results using the next half edge */
+//    };
 
     struct CloseProximityResults
     {
       std::vector<VertexIndex> verticies; /**< @brief The valid mesh verticies. */
       std::vector<HalfEdgeIndex> fences;  /**< @brief The valid half edges. */
       VertexIndex closest;                /**< @brief The closest mesh vertex */
-      utils::DistPoint2LineResults dist;  /**< @brief This stores closest distance information. */
+//      utils::DistPoint2LineResults dist;  /**< @brief This stores closest distance information. */
+      double dist;                        /**< @brief This stores closest distance information. */
       bool found;                         /**< @brief If close proximity was found. */
     };
 
@@ -146,8 +163,8 @@ namespace afront_meshing
     struct TriangleToCloseResults
     {
       PredictVertexResults pvr;                 /**< @brief The predicted vertex information provided */
-      CanCutEarResults ccer;                    /**< @brief The can cut ear results */
       VertexIndex closest;
+      TriangleData tri;                         /**< @brief The Triangle information */
       bool found;
     };
 
@@ -206,21 +223,20 @@ namespace afront_meshing
     void createFirstTriangle(const int &index);
     void createFirstTriangle(const double &x, const double &y, const double &z);
 
-    /** @brief Check whether an ear clip operation can be performed for the provided front. */
-    CanCutEarResults canCutEar(const FrontData &front) const;
-
     /** @brief Get the predicted vertex for the provided front */
-    PredictVertexResults predictVertex(const FrontData &front) const;
+    PredictVertexResults predictVertex(const AdvancingFrontData &afront) const;
 
-    CloseProximityResults isCloseProximity(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const;
+    CloseProximityResults isCloseProximity(const PredictVertexResults &pvr) const;
 
-    FenceViolationResults isFenceViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const CloseProximityResults &cpr, const PredictVertexResults &pvr) const;
+    FenceViolationResults isFenceViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const std::vector<HalfEdgeIndex> &fences, const VertexIndex &closest, const PredictVertexResults &pvr) const;
+
+    bool checkPrevNextHalfEdge(const AdvancingFrontData &afront, TriangleData &tri, VertexIndex &vi) const;
 
     /** @brief Check if the proposed triangle is to close to the existing mesh. */
-    TriangleToCloseResults isTriangleToClose(const CanCutEarResults &ccer, const PredictVertexResults &pvr) const;
+    TriangleToCloseResults isTriangleToClose(const PredictVertexResults &pvr) const;
 
     /** @brief Grow a triangle */
-    void grow(const CanCutEarResults &ccer, const PredictVertexResults &pvr);
+    void grow(const PredictVertexResults &pvr);
 
     /** @brief Merge triangle with the existing mesh */
     void merge(const TriangleToCloseResults &ttcr);
@@ -229,7 +245,7 @@ namespace afront_meshing
 //    void topologyEvent(const TriangleToCloseResults &ttcr);
 
     /** @brief Perform an ear cut operation */
-    void cutEar(const CanCutEarResults &ccer);
+    void cutEar(const CutEarData &ccer);
 
     /** @brief Print all of the meshes vertices */
     void printVertices() const;
@@ -269,8 +285,7 @@ namespace afront_meshing
     * @param half_edge Advancing half edge index
     * @return Data about the advancing half edge
     */
-    FrontData getAdvancingFrontData(const HalfEdgeIndex &half_edge) const;
-
+    AdvancingFrontData getAdvancingFrontData(const HalfEdgeIndex &half_edge) const;
 
     /**
      * @brief Create face data to be stored with the face. Currently it stores the center

@@ -7,16 +7,23 @@ namespace afront_meshing
     MovingLeastSquares::process(output);
 
     // Calculate the max principle curvature using mls result polynomial data
+    max_curvature_ = std::numeric_limits<double>::min();
+    min_curvature_ = std::numeric_limits<double>::max();
     for(int i = 0; i < output.size(); ++i)
     {
-      Eigen::Vector2f k = calculateCurvature(i);
-      output[i].curvature = k.cwiseAbs().maxCoeff();
-      if (output[i].curvature < 1e-5)
-      {
-        output[i].curvature = 1e-5;
-        std::cout << "Warning: Very Small Curvature!\n";
-      }
+      double k = calculateCurvature(output[i].getVector3fMap(), i).cwiseAbs().maxCoeff();
+      if (k < 1e-5)
+        k = 1e-5;
+
+      output[i].curvature = k;
+      if (k > max_curvature_)
+        max_curvature_ = k;
+
+      if (k < min_curvature_)
+        min_curvature_ = k;
     }
+    std::printf("\x1B[32m\tMin Curvature: %f, Max Curvature: %f\x1B[0m\n", min_curvature_, max_curvature_);
+
   }
 
   MLSSampling::SamplePointResults MLSSampling::samplePoint(const pcl::PointXYZ& pt) const
@@ -44,22 +51,22 @@ namespace afront_meshing
     v_disp = static_cast<float> ((add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].v_axis));
 
     pcl::Normal result_normal;
-    MLSResult result_mls = mls_results_[result.closest];
+    result.mls = mls_results_[result.closest];
     projectPointToMLSSurface(u_disp, v_disp,
-                             result_mls.u_axis,
-                             result_mls.v_axis,
-                             result_mls.plane_normal,
-                             result_mls.mean,
-                             result_mls.curvature,
-                             result_mls.c_vec,
-                             result_mls.num_neighbors,
+                             result.mls.u_axis,
+                             result.mls.v_axis,
+                             result.mls.plane_normal,
+                             result.mls.mean,
+                             result.mls.curvature,
+                             result.mls.c_vec,
+                             result.mls.num_neighbors,
                              result.point, result_normal);
 
     // Copy additional point information if available
     copyMissingFields(input_->points[result.closest], result.point);
 
     // Calculate principal curvature
-    Eigen::Vector2f k = calculateCurvature(u_disp, v_disp, result_mls);
+    Eigen::Vector2f k = calculateCurvature(u_disp, v_disp, result.mls);
 
     result.point.normal_x = result_normal.normal_x;
     result.point.normal_y = result_normal.normal_y;
@@ -67,10 +74,8 @@ namespace afront_meshing
 
     result.point.curvature = k.cwiseAbs().maxCoeff();
     if (result.point.curvature < 1e-5)
-    {
       result.point.curvature = 1e-5;
-      std::cout << "Warning: Very Small Curvature!\n";
-    }
+
 
     return result;
   }
@@ -127,8 +132,11 @@ namespace afront_meshing
     return k;
   }
 
-  Eigen::Vector2f MLSSampling::calculateCurvature(const int &index) const
+  Eigen::Vector2f MLSSampling::calculateCurvature(const Eigen::Vector3f pt, const int &index) const
   {
-    return calculateCurvature(0.001, 0.001, mls_results_[index]);
+    Eigen::Vector3d point = pt.template cast<double>();
+    float u_disp = static_cast<float> ((point - mls_results_[index].mean).dot(mls_results_[index].u_axis)),
+    v_disp = static_cast<float> ((point - mls_results_[index].mean).dot(mls_results_[index].v_axis));
+    return calculateCurvature(u_disp, v_disp, mls_results_[index]);
   }
 }

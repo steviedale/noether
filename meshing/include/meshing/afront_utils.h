@@ -14,6 +14,12 @@ namespace utils
     return pcl::PointXYZ(p(0), p(1), p(2));
   }
 
+  /** @brief Convert Eigen Vector3f to PCL PointXYZ */
+  pcl::PointXYZ convertEigenToPCL(const Eigen::Vector3d &p)
+  {
+    return pcl::PointXYZ(p(0), p(1), p(2));
+  }
+
   /**
   * @brief Get the mid point of a half edge given it's verticies
   * @param p1 Vertex of half edge

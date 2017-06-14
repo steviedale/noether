@@ -12,6 +12,7 @@ namespace afront_meshing
     {
       pcl::PointNormal point;   /**< @brief The point projected on to the MLS surface */
       int              closest; /**< @brief The closest point index on the MLS surface to the project point */
+      MLSResult        mls;     /**< @brief The MLS Results for the closest point */
       double           dist;    /**< @brief The distance squared between point and closest */
     };
 
@@ -21,12 +22,17 @@ namespace afront_meshing
     MLSSampling::SamplePointResults samplePoint(const pcl::PointXYZ& pt) const;
     MLSSampling::SamplePointResults samplePoint(const pcl::PointNormal& pt) const;
 
+    double getMaxCurvature() const {return max_curvature_;}
+    double getMinCurvature() const {return min_curvature_;}
+
   private:
 
     Eigen::Vector2f calculateCurvature(const float &u, const float &v, const MLSResult &mls_result) const;
-    Eigen::Vector2f calculateCurvature(const int &index) const;
+    Eigen::Vector2f calculateCurvature(const Eigen::Vector3f pt, const int &index) const;
 
     pcl::PointCloud<pcl::PointXYZ> cloud_;
+    double max_curvature_;
+    double min_curvature_;
   };
 }
 
