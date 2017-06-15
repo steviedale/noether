@@ -295,9 +295,7 @@ namespace afront_meshing
     Eigen::Vector3f p1 = sp.point.getVector3fMap();
 
     // Get the allowed grow distance and control the first triangle size
-    double d = 0.49;
-
-    GrowDistanceResults gdr = getGrowDistance(p1, d, d, d);
+    double max_step = getMaxStep(p1);
 
     // search for the nearest neighbor
     std::vector<int> K;
@@ -314,16 +312,16 @@ namespace afront_meshing
     norm = dp.getNormalVector3fMap();
 
     if (snap_)
-      p2 = (mls_cloud_->points[getPredictedVertex(p1, v1, gdr.l).closest]).getVector3fMap();
+      p2 = (mls_cloud_->points[getPredictedVertex(p1, v1, max_step).closest]).getVector3fMap();
     else
-      p2 = getPredictedVertex(p1, v1, gdr.l).point.getVector3fMap();
+      p2 = getPredictedVertex(p1, v1, max_step).point.getVector3fMap();
 
     mp = utils::getMidPoint(p1, p2);
-    d = utils::distPoint2Point(p1, p2);
+    double d = utils::distPoint2Point(p1, p2);
 
     v2 = norm.cross(v1).normalized();
 
-    gdr = getGrowDistance(mp, d, d, d);
+    GrowDistanceResults gdr = getGrowDistance(mp, d);
     p3 = getPredictedVertex(mp, v2, gdr.l).point.getVector3fMap();
 
     if (snap_)
@@ -434,11 +432,8 @@ namespace afront_meshing
 
     result.afront = afront;
 
-    // Calculate min max of all lengths attached to half edge
-    Eigen::Vector2d mm = getMinMaxEdgeLength(front.vi[0], front.vi[1]);
-
     // Get the allowed grow distance
-    result.gdr = getGrowDistance(front.mp, front.length, mm[0], mm[1]);
+    result.gdr = getGrowDistance(front.mp, front.length);
 
     // Get predicted vertex
     result.pv = getPredictedVertex(front.mp, front.d, result.gdr.l);
@@ -981,48 +976,63 @@ namespace afront_meshing
     return v2;
   }
 
-  AfrontMeshing::GrowDistanceResults AfrontMeshing::getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length, const double &min_length, const double &max_length) const
+  AfrontMeshing::GrowDistanceResults AfrontMeshing::getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length) const
   {
     GrowDistanceResults gdr;
+    gdr.estimated = getMaxStep(mp);
+    gdr.l = std::sqrt(pow(gdr.estimated, 2.0) - pow(edge_length / 2.0, 2.0));
+
+    return gdr;
+  }
+
+  double AfrontMeshing::getMaxStep(const Eigen::Vector3f &p) const
+  {
     pcl::PointNormal pn;
-
-    pn.x = mp(0);
-    pn.y = mp(1);
-    pn.z = mp(2);
-
-    int cnt = mls_cloud_tree_->radiusSearch(pn, 3 * r_, gdr.k, gdr.k_dist);
+    std::vector<int> k;
+    std::vector<float> k_dist;
+    pn.x = p(0);
+    pn.y = p(1);
+    pn.z = p(2);
 
     // What is shown in the afront paper. Need to figure out how to transverse the kdtree because
     // this could result in not enought point to meet the criteria.
     double len = std::numeric_limits<double>::max();
     double radius = 0;
-    for(int i = 0; i < cnt; ++i)
+    int j = 0;
+    int pcnt = 0;
+    bool finished = false;
+    while (pcnt < (mls_cloud_->points.size() - 1))
     {
-      float curvature = getCurvature(gdr.k[i]);
-      double ideal = 2.0 * std::sin(rho_ / 2.0) / curvature;
-
-      radius = sqrt(gdr.k_dist[i]);
-
-      double step_required = (1.0 - 0.8) * radius + 0.8 * ideal;
-      len = std::min(len, step_required);
-
-      if (radius >= (len/ (1.0 - 0.8)))
+      int cnt = mls_cloud_tree_->radiusSearch(pn, (j + 1) * r_, k, k_dist);
+      for(int i = pcnt; i < cnt; ++i)
       {
-        std::printf("\x1B[32m\tFound: %d, Iteration: %d\t Radius: %f!\x1B[0m\n", cnt, i, radius);
+        float curvature = getCurvature(k[i]);
+        double ideal = 2.0 * std::sin(rho_ / 2.0) / curvature;
+
+        radius = sqrt(k_dist[i]);
+
+        double step_required = (1.0 - reduction_) * radius + reduction_ * ideal;
+        len = std::min(len, step_required);
+
+        if (radius >= (len/ (1.0 - reduction_)))
+        {
+          std::printf("\x1B[32m\tFound: %d, Iteration: %d\t Radius: %f!\x1B[0m\n", cnt, i, radius);
+          finished = true;
+          break;
+        }
+      }
+
+      if (finished)
         break;
-      }
-      else if (i == (cnt - 1))
-      {
-        std::printf("\x1B[32m\tNot Found!\x1B[0m\n");
-      }
+
+      pcnt = cnt - 1;
+      ++j;
     }
 
-    gdr.valid = false;
-    gdr.max_curv = getMaxCurvature(gdr.k);
-    gdr.estimated = len;
-    gdr.l = std::sqrt(pow(gdr.estimated, 2.0) - pow(edge_length / 2.0, 2.0));
+    if (!finished)
+      std::printf("\x1B[32m\tNot Found!\x1B[0m\n");
 
-    return gdr;
+    return len;
   }
 
   MLSSampling::SamplePointResults AfrontMeshing::getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const
@@ -1033,64 +1043,52 @@ namespace afront_meshing
     return mls_.samplePoint(pcl::PointXYZ(p(0), p(1), p(2)));
   }
 
-  float AfrontMeshing::getMaxCurvature(const std::vector<int>& indices) const
-  {
-    float curv = 0.0;
-    for(int i = 0; i < indices.size(); ++i)
-    {
-      float c = getCurvature(indices[i]);
-      if (c > curv)
-        curv = c;
-    }
-    return curv;
-  }
+//  Eigen::Vector2d AfrontMeshing::getMinMaxEdgeLength(const VertexIndex &v1, const VertexIndex &v2) const
+//  {
+//    Eigen::Vector2d result;
+//    result[0] = std::numeric_limits<double>::max();
+//    result[1] = 0.0;
 
-  Eigen::Vector2d AfrontMeshing::getMinMaxEdgeLength(const VertexIndex &v1, const VertexIndex &v2) const
-  {
-    Eigen::Vector2d result;
-    result[0] = std::numeric_limits<double>::max();
-    result[1] = 0.0;
+//    // Get half edges for v1
+//    {
+//      OHEAVC       circ_oheav     = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(v1);
+//      const OHEAVC circ_oheav_end = circ_oheav;
+//      do
+//      {
+//        HalfEdgeIndex he = circ_oheav.getTargetIndex();
+//        pcl::PointXYZ p1, p2;
+//        p1 = mesh_vertex_data_[mesh_.getOriginatingVertexIndex(he).get()];
+//        p2 = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()];
+//        double d = utils::distPoint2Point(p1.getVector3fMap(), p2.getVector3fMap());
+//        if (d > result[1])
+//          result[1] = d;
 
-    // Get half edges for v1
-    {
-      OHEAVC       circ_oheav     = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(v1);
-      const OHEAVC circ_oheav_end = circ_oheav;
-      do
-      {
-        HalfEdgeIndex he = circ_oheav.getTargetIndex();
-        pcl::PointXYZ p1, p2;
-        p1 = mesh_vertex_data_[mesh_.getOriginatingVertexIndex(he).get()];
-        p2 = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()];
-        double d = utils::distPoint2Point(p1.getVector3fMap(), p2.getVector3fMap());
-        if (d > result[1])
-          result[1] = d;
+//        if (d < result[0])
+//          result[0] = d;
+//      } while (++circ_oheav != circ_oheav_end);
+//    }
 
-        if (d < result[0])
-          result[0] = d;
-      } while (++circ_oheav != circ_oheav_end);
-    }
+//    // Get half edges for v2
+//    {
+//      OHEAVC       circ_oheav     = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(v2);
+//      const OHEAVC circ_oheav_end = circ_oheav;
+//      do
+//      {
+//        HalfEdgeIndex he = circ_oheav.getTargetIndex();
+//        pcl::PointXYZ p1, p2;
+//        p1 = mesh_vertex_data_[mesh_.getOriginatingVertexIndex(he).get()];
+//        p2 = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()];
+//        double d = utils::distPoint2Point(p1.getVector3fMap(), p2.getVector3fMap());
+//        if (d > result[1])
+//          result[1] = d;
 
-    // Get half edges for v2
-    {
-      OHEAVC       circ_oheav     = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(v2);
-      const OHEAVC circ_oheav_end = circ_oheav;
-      do
-      {
-        HalfEdgeIndex he = circ_oheav.getTargetIndex();
-        pcl::PointXYZ p1, p2;
-        p1 = mesh_vertex_data_[mesh_.getOriginatingVertexIndex(he).get()];
-        p2 = mesh_vertex_data_[mesh_.getTerminatingVertexIndex(he).get()];
-        double d = utils::distPoint2Point(p1.getVector3fMap(), p2.getVector3fMap());
-        if (d > result[1])
-          result[1] = d;
+//        if (d < result[0])
+//          result[0] = d;
+//      } while (++circ_oheav != circ_oheav_end);
+//    }
 
-        if (d < result[0])
-          result[0] = d;
-      } while (++circ_oheav != circ_oheav_end);
-    }
-
-    return result;
-  }
+//    return result;
+//  }
 
   AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const Eigen::Vector3f p3) const
   {

@@ -44,11 +44,6 @@ namespace afront_meshing
     {
       double l;                  /**< @brief Allowed grow distance perpendicular to half edge */
       double estimated;          /**< @brief The calculated edge length */
-      double ideal;              /**< @brief The ideal edge length */
-      double max_curv;           /**< @brief The maximum curvature found with search radius */
-      std::vector<int> k;        /**< @brief The resultant indices of the neighboring points */
-      std::vector<float> k_dist; /**< @brief The resultant squared distances to the neighboring points */
-      bool valid;                /**< @brief True if successful, otherwise false */
     };
 
     struct TriangleData
@@ -124,23 +119,6 @@ namespace afront_meshing
       bool at_boundary;                   /**< @brief The predicted vertex is near the boundry of the point cloud */
     };
 
-
-//    struct CanCutEarResults
-//    {
-//      enum CanCutEarResultTypes
-//      {
-//        None = 0,             /**< @brief Can not perform ear cut operation. */
-//        PrevHalfEdge = 1,     /**< @brief Can cut ear with previous half edge. */
-//        NextHalfEdge = 2,     /**< @brief Can cut ear with next half edge. */
-//        ClosedArea = 3,       /**< @brief The front, previous and next half edge create a triangle. */
-//      };
-
-//      CanCutEarResultTypes type;  /**< @brief The type of cut ear operation. */
-//      FrontData front;            /**< @brief Advancing front data */
-//      CanCutEarResult prev;       /**< @brief The results using the previous half edge */
-//      CanCutEarResult next;       /**< @brief The results using the next half edge */
-//    };
-
     struct CloseProximityResults
     {
       std::vector<VertexIndex> verticies; /**< @brief The valid mesh verticies. */
@@ -207,11 +185,11 @@ namespace afront_meshing
     /** @brief Get the primary variable used to control mesh triangulation size */
     double getRho() const {return rho_;}
 
-    /** @brief Set how fast can the mesh grow and shrink. (val > 1.0) */
-    void setTriangleQuality(double val) {reduction_ = val;}
+    /** @brief Set how fast can the mesh grow and shrink. (val < 1.0) */
+    void setTriangleReduction(double val) {(val >= 1 || val <= 0) ? reduction_ = 0.8 : reduction_ = val;}
 
     /** @brief Get the variable that controls how fast the mesh can grow and shrink. */
-    double getTriangleQuality() const {return reduction_;}
+    double getTriangleReduction() const {return reduction_;}
 
     /** @brief Set the mls radius used for smoothing */
     void setRadius(double val){r_ = val;}
@@ -306,11 +284,16 @@ namespace afront_meshing
     * @brief Get the allowed grow distance
     * @param mp The mid point of the half edge
     * @param edge_length The half edge length
-    * @param min_length The minium edge length attached to half edge
-    * @param max_length The maximum edge length attached to half edge
     * @return The allowed grow distance
     */
-    GrowDistanceResults getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length, const double &min_length, const double &max_length) const;
+    GrowDistanceResults getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length) const;
+
+    /**
+     * @brief Get the maximum step required for a given point
+     * @param p The point for which to determine the max step
+     * @return The max step required
+     */
+    double getMaxStep(const Eigen::Vector3f &p) const;
 
     /**
     * @brief Get the predicted vertex for the new triangle
@@ -321,12 +304,6 @@ namespace afront_meshing
     */
     MLSSampling::SamplePointResults getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const;
 
-    /**
-    * @brief Gets the Minimum and Maximum edge attached to half edge
-    * @param half_edge The half edge from which to grow the triangle
-    * @return [min, max] edge length
-    */
-    Eigen::Vector2d getMinMaxEdgeLength(const VertexIndex &v1, const VertexIndex &v2) const;
 
     /** @brief Update the Kd Tree of the mesh vertices */
     void updateKdTree();
@@ -339,9 +316,6 @@ namespace afront_meshing
 
     /** @brief Get the curvature provided an index. */
     float getCurvature(const int &index) const;
-
-    /** @brief Find the maximum curvature given a set of indicies. */
-    float getMaxCurvature(const std::vector<int> &indices) const;
 
     /** @brief Calculate the distance between a point and a half edge. */
 //    DistPointToHalfEdgeResults distPointToHalfEdge(const Eigen::Vector3f p, const HalfEdgeIndex &half_edge) const;

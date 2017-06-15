@@ -11,7 +11,7 @@ int main(int argc, char **argv)
   std::string pcd_file;
   std::string ply_file;
   double rho;
-  double quality;
+  double reduction;
   double radius;
   bool snap;
   int sample;
@@ -43,10 +43,10 @@ int main(int argc, char **argv)
   nh.param<double>("radius", radius, 0.1);
   nh.param<bool>("snap", snap, false);
   nh.param<int>("sample", sample, 0);
-  nh.param<double>("quality", quality, 1.2);
-  if (quality < 1)
+  nh.param<double>("reduction", reduction, 0.8);
+  if (reduction >= 1 || reduction <= 0)
   {
-    ROS_ERROR("Quality must be greater than or equal to 1.");
+    ROS_ERROR("Reduction must be (0 < reduction < 1)");
     return 0;
   }
 
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(filtered_cloud));
   mesher.setRho(rho);
-  mesher.setTriangleQuality(quality);
+  mesher.setTriangleReduction(reduction);
   mesher.setRadius(radius);
   mesher.enableSnap(snap);
 
