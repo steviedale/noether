@@ -7,7 +7,7 @@
 
 #include <meshing/mls_sampling.h>
 #include <meshing/afront_utils.h>
-#define AFRONTDEBUG
+#undef AFRONTDEBUG
 namespace afront_meshing
 {
   class AfrontMeshing
@@ -186,10 +186,10 @@ namespace afront_meshing
     double getRho() const {return rho_;}
 
     /** @brief Set how fast can the mesh grow and shrink. (val < 1.0) */
-    void setTriangleReduction(double val) {(val >= 1 || val <= 0) ? reduction_ = 0.8 : reduction_ = val;}
+    void setReduction(double val) {(val >= 1 || val <= 0) ? reduction_ = 0.8 : reduction_ = val;}
 
     /** @brief Get the variable that controls how fast the mesh can grow and shrink. */
-    double getTriangleReduction() const {return reduction_;}
+    double getReduction() const {return reduction_;}
 
     /** @brief Set the mls radius used for smoothing */
     void setRadius(double val){r_ = val;}

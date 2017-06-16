@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(filtered_cloud));
   mesher.setRho(rho);
-  mesher.setTriangleReduction(reduction);
+  mesher.setReduction(reduction);
   mesher.setRadius(radius);
   mesher.enableSnap(snap);
 
