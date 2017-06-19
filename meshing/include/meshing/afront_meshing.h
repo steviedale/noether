@@ -116,7 +116,8 @@ namespace afront_meshing
       TriangleData tri;                   /**< @brief The proposed triangle data */
       MLSSampling::SamplePointResults pv; /**< @brief The predicted point projected on the mls surface */
       Eigen::Vector2d k;                  /**< @brief The principal curvature using the polynomial */
-      bool at_boundary;                   /**< @brief The predicted vertex is near the boundry of the point cloud */
+      bool boundary;                      /**< @brief The predicted vertex is near the boundry of the point cloud. Don't Create Triangle */
+      bool valid;                         /**< @brief Indicates if a new triangle can be added. */
     };
 
     struct CloseProximityResults
@@ -124,7 +125,6 @@ namespace afront_meshing
       std::vector<VertexIndex> verticies; /**< @brief The valid mesh verticies. */
       std::vector<HalfEdgeIndex> fences;  /**< @brief The valid half edges. */
       VertexIndex closest;                /**< @brief The closest mesh vertex */
-//      utils::DistPoint2LineResults dist;  /**< @brief This stores closest distance information. */
       double dist;                        /**< @brief This stores closest distance information. */
       bool found;                         /**< @brief If close proximity was found. */
     };
@@ -162,9 +162,6 @@ namespace afront_meshing
     /** @brief Advance the mesh by adding one triangle */
     void stepMesh();
 
-    /** @brief This will force every point projected onto the mls surface to snap to existing data. */
-    void enableSnap(const bool &enable) {snap_ = enable;}
-
     /** @brief Indicates if it has finished meshing the surface */
     bool isFinished() {return finished_;}
 
@@ -196,6 +193,12 @@ namespace afront_meshing
 
     /** @brief Get the mls radius used for smoothing */
     double getRadius() const {return r_;}
+
+    /** @brief Set the number of threads to use */
+    void setNumberOfThreads(const int threads) {threads_ = threads_;}
+
+    /** @brief Get the number of threads to use */
+    int getNumberOfThreads() {return threads_;}
 
     /** @brief Create the first triangle given a starting location. */
     void createFirstTriangle(const int &index);
@@ -330,7 +333,10 @@ namespace afront_meshing
     TriangleData getTriangleData(const FrontData &front, const Eigen::Vector3f p3) const;
 
     /** @brief Check if a point is in the grow direction of the front. */
-    bool isPointValid(const FrontData &front, const Eigen::Vector3f p, bool limit = true) const;
+    bool isPointValid(const FrontData &front, const Eigen::Vector3f p) const;
+
+    /** @brief Check if the front is at or near the boundary of the point cloud. */
+    bool nearBoundary(const FrontData &front, const Eigen::Vector3f p) const;
 
     #ifdef AFRONTDEBUG
     /**
@@ -348,12 +354,12 @@ namespace afront_meshing
     double rho_;
     double reduction_;
     double r_;
-    bool snap_;
 
     // Guidance field data
     MLSSampling mls_;
     pcl::PointCloud<pcl::PointNormal>::Ptr mls_cloud_;
     pcl::search::KdTree<pcl::PointNormal>::Ptr mls_cloud_tree_;
+    int threads_;
 
     // Generated data
     Mesh mesh_; /**< The mesh object for inserting faces/vertices */

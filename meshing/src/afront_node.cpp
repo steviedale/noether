@@ -13,8 +13,8 @@ int main(int argc, char **argv)
   double rho;
   double reduction;
   double radius;
-  bool snap;
   int sample;
+  int threads;
 
   if (nh.hasParam("pcd_file"))
   {
@@ -41,9 +41,10 @@ int main(int argc, char **argv)
 
   nh.param<double>("rho", rho, 0.5);
   nh.param<double>("radius", radius, 0.1);
-  nh.param<bool>("snap", snap, false);
   nh.param<int>("sample", sample, 0);
   nh.param<double>("reduction", reduction, 0.8);
+  nh.param<int>("threads", threads, 1);
+
   if (reduction >= 1 || reduction <= 0)
   {
     ROS_ERROR("Reduction must be (0 < reduction < 1)");
@@ -65,7 +66,7 @@ int main(int argc, char **argv)
   mesher.setRho(rho);
   mesher.setReduction(reduction);
   mesher.setRadius(radius);
-  mesher.enableSnap(snap);
+  mesher.setNumberOfThreads(threads);
 
   sleep(8);
   if (mesher.initMesher(in_cloud))
