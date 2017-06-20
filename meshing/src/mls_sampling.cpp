@@ -22,8 +22,6 @@ namespace afront_meshing
       if (k < min_curvature_)
         min_curvature_ = k;
     }
-    std::printf("\x1B[32m\tMin Curvature: %f, Max Curvature: %f\x1B[0m\n", min_curvature_, max_curvature_);
-
   }
 
   MLSSampling::SamplePointResults MLSSampling::samplePoint(const pcl::PointXYZ& pt) const

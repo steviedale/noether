@@ -8,36 +8,41 @@ int main(int argc, char **argv)
 {
   ros::init(argc, argv, "afront_node");
   ros::NodeHandle nh("~");
-  std::string pcd_file;
-  std::string ply_file;
+  std::string input_file;
+  std::string output_file;
   double rho;
   double reduction;
   double radius;
   int sample;
   int threads;
+  std::string extension;
 
-  if (nh.hasParam("pcd_file"))
+  if (nh.hasParam("input_file"))
   {
-    nh.param<std::string>("pcd_file", pcd_file, "");
+    nh.param<std::string>("input_file", input_file, "");
+    extension = boost::filesystem::extension(input_file);
+    ROS_INFO_STREAM("" << extension);
+    if (extension != ".pcd" && extension != ".ply")
+    {
+      ROS_ERROR("Only file types supported are pcd and ply.");
+      return 0;
+    }
   }
   else
   {
-    ROS_ERROR("Must provide a input pcd file!");
+    ROS_ERROR("Must provide a input file!");
     return 0;
   }
-  ROS_INFO("%s", pcd_file.c_str());
 
-
-  if (nh.hasParam("ply_file"))
+  if (nh.hasParam("output_file"))
   {
-    nh.param<std::string>("ply_file", ply_file, "");
+    nh.param<std::string>("output_file", output_file, "");
   }
   else
   {
     ROS_ERROR("Must provide a output ply file!");
     return 0;
   }
-  ROS_INFO("%s", ply_file.c_str());
 
   nh.param<double>("rho", rho, 0.5);
   nh.param<double>("radius", radius, 0.1);
@@ -53,9 +58,15 @@ int main(int argc, char **argv)
 
   pcl::PointCloud<pcl::PointXYZ> cloud, filtered_cloud;
   afront_meshing::AfrontMeshing mesher;
-  if (pcl::io::loadPCDFile<pcl::PointXYZ>(pcd_file, cloud) == -1) //* load the file
+
+  if (extension == ".pcd" && pcl::io::loadPCDFile<pcl::PointXYZ>(input_file, cloud) == -1)
   {
     ROS_ERROR("Couldn't read pcd file!");
+    return 0;
+  }
+  else if (extension == ".ply" && pcl::io::loadPLYFile<pcl::PointXYZ>(input_file, cloud) == -1)
+  {
+    ROS_ERROR("Couldn't read ply file!");
     return 0;
   }
 
@@ -68,7 +79,6 @@ int main(int argc, char **argv)
   mesher.setRadius(radius);
   mesher.setNumberOfThreads(threads);
 
-  sleep(8);
   if (mesher.initMesher(in_cloud))
   {
     if (sample == 0)
@@ -77,7 +87,7 @@ int main(int argc, char **argv)
       for (auto i = 0; i < sample; ++i)
         mesher.stepMesh();
 
-    pcl::io::savePLYFile(ply_file, mesher.getMesh());
+    pcl::io::savePLYFile(output_file, mesher.getMesh());
   }
 
   return 0;

@@ -7,14 +7,14 @@
 
 #include <meshing/mls_sampling.h>
 #include <meshing/afront_utils.h>
-#undef AFRONTDEBUG
+#define AFRONTDEBUG
 namespace afront_meshing
 {
   class AfrontMeshing
   {
     struct MeshTraits
     {
-      typedef pcl::PointXYZ         VertexData;
+      typedef pcl::PointNormal      VertexData;
       typedef int                   HalfEdgeData;
       typedef int                   EdgeData;
       typedef pcl::PointNormal      FaceData;
@@ -377,6 +377,7 @@ namespace afront_meshing
     std::uint64_t counter_;
     mutable std::uint64_t fence_counter_;
     pcl::visualization::PCLVisualizer::Ptr viewer_;
+    bool pause_;
     #endif
   };
 } // namespace afront_meshing

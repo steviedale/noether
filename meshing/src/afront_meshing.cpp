@@ -75,7 +75,8 @@ namespace afront_meshing
     viewer_->createViewPort(0.5, 0.0, 1.0, 0.5, v4);
     viewer_->addCoordinateSystem(1.0, v4);
     pcl::visualization::PointCloudColorHandlerCustom<pcl::PointNormal> single_color2(mls_cloud_, 0, 255, 0);
-    viewer_->addPointCloud<pcl::PointNormal>(mls_cloud_, "mls_cloud2", v4);
+    viewer_->addPointCloud<pcl::PointNormal>(mls_cloud_, single_color2, "mls_cloud2", v4);
+    viewer_->addPointCloudNormals<pcl::PointNormal>(mls_cloud_, 1, 0.005, "mls_cloud_normals", v4);
 
     viewer_->registerKeyboardCallback(&AfrontMeshing::keyboardEventOccurred, *this);
     viewer_->spin();
@@ -197,8 +198,8 @@ namespace afront_meshing
     viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "PrevHalfEdge", 1);
 
 
-    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> single_color(mesh_vertex_data_copy_, 255, 128, 0);
-    viewer_->addPointCloud<pcl::PointXYZ>(mesh_vertex_data_copy_, single_color, "Mesh_Vertex_Cloud", 2);
+    pcl::visualization::PointCloudColorHandlerCustom<MeshTraits::VertexData> single_color(mesh_vertex_data_copy_, 255, 128, 0);
+    viewer_->addPointCloud<MeshTraits::VertexData>(mesh_vertex_data_copy_, single_color, "Mesh_Vertex_Cloud", 2);
     #endif
 
     if (mesh_.getOppositeFaceIndex(afront.next.secondary) != mesh_.getOppositeFaceIndex(afront.prev.secondary) && afront.next.vi[2] == afront.prev.vi[2]) // This indicates a closed area
@@ -300,8 +301,8 @@ namespace afront_meshing
 
   void AfrontMeshing::createFirstTriangle(const int &index)
   {
-    MLSSampling::SamplePointResults sp = mls_.samplePoint(mls_cloud_->points[index]);
-    Eigen::Vector3f p1 = sp.point.getVector3fMap();
+    MLSSampling::SamplePointResults sp1 = mls_.samplePoint(mls_cloud_->points[index]);
+    Eigen::Vector3f p1 = sp1.point.getVector3fMap();
 
     // Get the allowed grow distance and control the first triangle size
     double max_step = getMaxStep(p1);
@@ -309,10 +310,11 @@ namespace afront_meshing
     // search for the nearest neighbor
     std::vector<int> K;
     std::vector<float> K_dist;
-    mls_cloud_tree_->nearestKSearch(sp.point, 2, K, K_dist);
+    mls_cloud_tree_->nearestKSearch(sp1.point, 2, K, K_dist);
 
     // use l1 and nearest neighbor to extend edge
     pcl::PointNormal dp;
+    MLSSampling::SamplePointResults sp2, sp3;
     Eigen::Vector3f p2, p3, v1, v2, mp, norm;
 
     dp = mls_cloud_->points[K[1]];
@@ -320,7 +322,8 @@ namespace afront_meshing
     v1 = v1.normalized();
     norm = dp.getNormalVector3fMap();
 
-    p2 = getPredictedVertex(p1, v1, max_step).point.getVector3fMap();
+    sp2 = getPredictedVertex(p1, v1, max_step);
+    p2 = sp2.point.getVector3fMap();
 
     mp = utils::getMidPoint(p1, p2);
     double d = utils::distPoint2Point(p1, p2);
@@ -328,13 +331,18 @@ namespace afront_meshing
     v2 = norm.cross(v1).normalized();
 
     GrowDistanceResults gdr = getGrowDistance(mp, d);
-    p3 = getPredictedVertex(mp, v2, gdr.l).point.getVector3fMap();
+    sp3 = getPredictedVertex(mp, v2, gdr.l);
+    p3 = sp3.point.getVector3fMap();
+
+    std::cout << sp1.point.getNormalVector3fMap().transpose() << std::endl;
+    std::cout << sp2.point.getNormalVector3fMap().transpose() << std::endl;
+    std::cout << sp3.point.getNormalVector3fMap().transpose() << std::endl;
 
     MeshTraits::FaceData fd = createFaceData(p1, p2, p3);
     VertexIndices vi;
-    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p1(0), p1(1), p1(2))));
-    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p2(0), p2(1), p2(2))));
-    vi.push_back(mesh_.addVertex(pcl::PointXYZ(p3(0), p3(1), p3(2))));
+    vi.push_back(mesh_.addVertex(sp1.point));
+    vi.push_back(mesh_.addVertex(sp2.point));
+    vi.push_back(mesh_.addVertex(sp3.point));
     mesh_.addFace(vi[0], vi[1], vi[2], fd);
   }
 
@@ -453,7 +461,9 @@ namespace afront_meshing
     }
     else
     {
-      std::printf("\x1B[32m\tUnable to predict a valid vertex!\x1B[0m\n");
+      #ifdef AFRONTDEBUG
+      std::printf("\x1B[32m  Unable to predict a valid vertex!\x1B[0m\n");
+      #endif
       result.boundary = false;
       result.valid = false;
     }
@@ -467,8 +477,7 @@ namespace afront_meshing
     std::vector<int> K;
     std::vector<float> K_dist;
 
-    pcl::PointXYZ search_pt = utils::convertEigenToPCL(pvr.tri.p[2]);
-    mesh_tree_->radiusSearch(search_pt, 3.0 * pvr.gdr.estimated, K, K_dist);
+    mesh_tree_->radiusSearch(pvr.pv.point, 3.0 * pvr.gdr.estimated, K, K_dist);
 
     results.fences.reserve(K.size());
     results.verticies.reserve(K.size());
@@ -501,6 +510,10 @@ namespace afront_meshing
             if (!mesh_.isBoundary(he))
               continue;
           }
+
+          // Don't include the previouse or next half edge
+          if (he == pvr.afront.next.secondary || he == pvr.afront.prev.secondary)
+            continue;
 
           Eigen::Vector3f endpt = mesh_vertex_data_[evi.get()].getVector3fMap();
           bool endpt_valid = isPointValid(pvr.afront.front, endpt);
@@ -975,8 +988,7 @@ namespace afront_meshing
   {
     // Add new face
     MeshTraits::FaceData new_fd = createFaceData(pvr.tri.p[0], pvr.tri.p[1], pvr.tri.p[2]);
-    pcl::PointXYZ np(pvr.tri.p[2](0), pvr.tri.p[2](1), pvr.tri.p[2](2));
-    mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(np), new_fd);
+    mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(pvr.pv.point), new_fd);
 
     // Add new half edges to the queue
     addToQueue(getNextHalfEdge(pvr.afront.prev.secondary));
@@ -1247,6 +1259,13 @@ namespace afront_meshing
 #ifdef AFRONTDEBUG
   void AfrontMeshing::keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*)
   {
+    if (event.getKeySym() == "i" && event.keyDown())
+    {
+      pause_ = true;
+      std::printf("\x1B[36mInterupted!\x1B[0m\n");
+      return;
+    }
+
     if (event.getKeySym() == "n" && event.keyDown())
     {
       if (!isFinished())
@@ -1256,17 +1275,21 @@ namespace afront_meshing
         viewer_->removePolygonMesh();
         viewer_->addPolygonMesh(getMesh());
       }
+      return;
     }
 
     if (event.getKeySym() == "t" && event.keyDown())
     {
-      if (!isFinished())
+      pause_ = false;
+      while (!isFinished() && !pause_)
       {
-        generateMesh();
+        stepMesh();
 
+        viewer_->spinOnce(1, true);
         viewer_->removePolygonMesh();
         viewer_->addPolygonMesh(getMesh());
       }
+      return;
     }
 
     if (event.getKeySym() == "m" && event.keyDown())
@@ -1276,11 +1299,11 @@ namespace afront_meshing
         for (auto i = 0; i < 1000; ++i)
         {
           stepMesh();
-
           viewer_->removePolygonMesh();
           viewer_->addPolygonMesh(getMesh());
         }
       }
+      return;
     }
   }
 #endif
