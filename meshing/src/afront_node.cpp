@@ -21,7 +21,6 @@ int main(int argc, char **argv)
   {
     nh.param<std::string>("input_file", input_file, "");
     extension = boost::filesystem::extension(input_file);
-    ROS_INFO_STREAM("" << extension);
     if (extension != ".pcd" && extension != ".ply")
     {
       ROS_ERROR("Only file types supported are pcd and ply.");

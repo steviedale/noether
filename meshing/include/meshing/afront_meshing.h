@@ -83,7 +83,7 @@ namespace afront_meshing
       Eigen::Vector3f d;       /**< @brief The half edge grow direction */
       VertexIndex vi[2];       /**< @brief The half edge vertex indicies */
       Eigen::Vector3f p[2];    /**< @brief The half edge points (Origninating, Terminating) */
-
+      Eigen::Vector3f n[2];    /**< @brief The half edge point normals (Origninating, Terminating) */
     };
 
     struct CutEarData
@@ -111,13 +111,21 @@ namespace afront_meshing
 
     struct PredictVertexResults
     {
+      enum PredictVertexTypes
+      {
+        Valid = 0,                        /**< @brief The project point is valid. */
+        AtBoundary = 1,                   /**< @brief At the point cloud boundary. */
+        InvalidStepSize = 2,              /**< @brief The step size is invalid for the given half edge (2 * step size < front.length). */
+        InvalidVertexNormal = 3,          /**< @brief The projected points normal is not consistant with the other triangle normals. */
+        InvalidTriangleNormal = 4         /**< @brief The triangle normal created by the project point is not consistant with the vertex normals. */
+      };
+
       AdvancingFrontData afront;          /**< @brief Advancing front data */
       GrowDistanceResults gdr;            /**< @brief Allowed grow distance */
       TriangleData tri;                   /**< @brief The proposed triangle data */
       MLSSampling::SamplePointResults pv; /**< @brief The predicted point projected on the mls surface */
       Eigen::Vector2d k;                  /**< @brief The principal curvature using the polynomial */
-      bool boundary;                      /**< @brief The predicted vertex is near the boundry of the point cloud. Don't Create Triangle */
-      bool valid;                         /**< @brief Indicates if a new triangle can be added. */
+      PredictVertexTypes status;          /**< @brief The predicted vertex is near the boundry of the point cloud. Don't Create Triangle */
     };
 
     struct CloseProximityResults
@@ -168,8 +176,8 @@ namespace afront_meshing
     /** @brief Get the current polygon mesh */
     pcl::PolygonMesh getMesh() const;
 
-    /** @brief Get the normals */
-    pcl::PointCloud<pcl::Normal>::ConstPtr getNormals() const;
+    /** @brief Get the mesh vertex normals */
+    pcl::PointCloud<pcl::Normal>::ConstPtr getMeshVertexNormals() const;
 
     #ifdef AFRONTDEBUG
     /**  @brief Get the internal viewer */
@@ -177,7 +185,12 @@ namespace afront_meshing
     #endif
 
     /** @brief Set the primary variable used to control mesh triangulation size */
-    void setRho(double val){rho_ = val;}
+    void setRho(double val)
+    {
+      rho_ = val;
+      hausdorff_error_ = (1.0 - sqrt((1.0 + 2.0 * cos(rho_)) / 3.0)) * (1.0 / (2.0 * sin(rho_ / 2)));
+      std::cout << hausdorff_error_ << std::endl;
+    }
 
     /** @brief Get the primary variable used to control mesh triangulation size */
     double getRho() const {return rho_;}
@@ -312,7 +325,20 @@ namespace afront_meshing
     void updateKdTree();
 
     /** @brief Get the next half edge connected to the provided half edge. */
-    HalfEdgeIndex getNextHalfEdge(const HalfEdgeIndex &half_edge) const {return mesh_.getNextHalfEdgeIndex(half_edge);}
+    HalfEdgeIndex getNextHalfEdge(const HalfEdgeIndex &half_edge) const
+    {
+      return mesh_.getNextHalfEdgeIndex(half_edge);
+//      OutgoingHalfEdgeAroundVertexCirculator       circ     = this->getOutgoingHalfEdgeAroundVertexCirculator (idx_vertex);
+//      const OutgoingHalfEdgeAroundVertexCirculator circ_end = circ;
+
+//      if (!this->isBoundary ((circ++).getTargetIndex ())) return (true);
+//      do
+//      {
+//        if (this->isBoundary (circ.getTargetIndex ())) return (false);
+//      } while (++circ != circ_end);
+
+//      return (true);
+    }
 
     /** @brief Get the previous half edge connected to the provided half edge. */
     HalfEdgeIndex getPrevHalfEdge(const HalfEdgeIndex &half_edge) const {return mesh_.getPrevHalfEdgeIndex(half_edge);}
@@ -321,7 +347,6 @@ namespace afront_meshing
     float getCurvature(const int &index) const;
 
     /** @brief Calculate the distance between a point and a half edge. */
-//    DistPointToHalfEdgeResults distPointToHalfEdge(const Eigen::Vector3f p, const HalfEdgeIndex &half_edge) const;
     utils::DistLine2LineResults distLineToHalfEdge(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge) const;
 
     /**
@@ -354,6 +379,10 @@ namespace afront_meshing
     double rho_;
     double reduction_;
     double r_;
+
+    // Algorithm Data
+    double hausdorff_error_;
+    double max_edge_length_;
 
     // Guidance field data
     MLSSampling mls_;

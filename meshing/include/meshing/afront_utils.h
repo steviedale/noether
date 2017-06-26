@@ -8,6 +8,49 @@ namespace afront_meshing
 namespace utils
 {
 
+  /** @brief Align pn's normal with av so they point in the same direction */
+  bool alignNormal(Eigen::Vector3f &pn, const Eigen::Vector3f &av)
+  {
+    double dot = pn.dot(av);
+    if (dot < 0.0)
+    {
+      pn *= -1.0;
+      return true;
+    }
+
+    return false;
+  }
+
+  /** @brief Align pn's normal with av so they point in the same direction */
+  bool alignNormal(pcl::PointNormal &pn, const pcl::PointNormal &av)
+  {
+    Eigen::Vector3f normal =  pn.getNormalVector3fMap();
+    if (alignNormal(normal, av.getNormalVector3fMap()));
+    {
+      pn.normal_x = normal[0];
+      pn.normal_y = normal[1];
+      pn.normal_z = normal[2];
+      return true;
+    }
+
+    return false;
+  }
+
+  /** @brief Check if two normals are within a tolerance */
+  bool checkNormal(const Eigen::Vector3f n1, const Eigen::Vector3f n2, const double &tol)
+  {
+    double dot = n1.dot(n2);
+    if (dot < 0.0)
+      return false;
+
+    double denom = n2.norm() * n2.norm();
+    double angle = acos(dot/denom);
+    if (angle > tol)
+      return false;
+
+    return true;
+  }
+
   /** @brief Convert Eigen Vector3f to PCL PointXYZ */
   pcl::PointXYZ convertEigenToPCL(const Eigen::Vector3f &p)
   {
@@ -192,9 +235,9 @@ namespace utils
     results.origin = origin;
     results.u = u;
     results.v = v;
-    Eigen::Vector3f normal = u.cross(v);
+    Eigen::Vector3f normal = u.cross(v).normalized();
 
-    if (std::abs(normal.dot(results.w)) < 1.0e-8)
+    if (std::abs(normal.dot(results.w.normalized())) < 1.0e-8)
     {
       results.parallel = true;
     }
