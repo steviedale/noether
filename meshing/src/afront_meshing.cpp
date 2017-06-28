@@ -36,16 +36,6 @@ namespace afront_meshing
     // Create first triangle
     createFirstTriangle(rand() % mls_cloud_->size());
 
-    // Get the inital boundary of the mesh
-    const HalfEdgeIndex& idx_he_boundary = mesh_.getOutgoingHalfEdgeIndex(mesh_.getVertexIndex(mesh_vertex_data_[0]));
-    IHEAFC       circ_iheaf     = mesh_.getInnerHalfEdgeAroundFaceCirculator(idx_he_boundary);
-    const IHEAFC circ_iheaf_end = circ_iheaf;
-    do
-    {
-      HalfEdgeIndex he = circ_iheaf.getTargetIndex();
-      addToQueue(he);
-    } while (++circ_iheaf != circ_iheaf_end);
-
     #ifdef AFRONTDEBUG
     viewer_ = pcl::visualization::PCLVisualizer::Ptr(new pcl::visualization::PCLVisualizer("3D Viewer"));
     viewer_->initCameraParameters();
@@ -372,20 +362,13 @@ namespace afront_meshing
     vi.push_back(mesh_.addVertex(sp1.point));
     vi.push_back(mesh_.addVertex(sp2.point));
     vi.push_back(mesh_.addVertex(sp3.point));
-    mesh_.addFace(vi[0], vi[1], vi[2], fd);
+    FaceIndex fi = mesh_.addFace(vi[0], vi[1], vi[2], fd);
+    addToQueue(fi);
   }
 
   void AfrontMeshing::cutEar(const CutEarData &ccer)
   {
     assert(ccer.tri.valid);
-
-    // Add new face
-    HalfEdgeIndex temp;
-    if (ccer.type == CutEarData::PrevHalfEdge)
-      temp = getPrevHalfEdge(ccer.secondary);
-    else
-      temp = getPrevHalfEdge(ccer.primary);
-
     if (ccer.tri.B > max_edge_length_)
       max_edge_length_ = ccer.tri.B;
 
@@ -397,11 +380,17 @@ namespace afront_meshing
                                                  (mesh_vertex_data_[ccer.vi[2].get()]).getVector3fMap());
 
 
-    mesh_.addFace(ccer.vi[0], ccer.vi[1], ccer.vi[2], new_fd);
+    FaceIndex fi = mesh_.addFace(ccer.vi[0], ccer.vi[1], ccer.vi[2], new_fd);
 
-    addToQueue(getNextHalfEdge(temp));
-    removeFromQueue(ccer.secondary);
-    removeFromBoundary(ccer.secondary);
+    if (addToQueue(fi))
+    {
+      removeFromQueue(ccer.secondary);
+      removeFromBoundary(ccer.secondary);
+    }
+    else
+    {
+      addToBoundary(ccer.primary);
+    }
   }
 
   AfrontMeshing::AdvancingFrontData AfrontMeshing::getAdvancingFrontData(const HalfEdgeIndex &half_edge) const
@@ -422,7 +411,7 @@ namespace afront_meshing
 
     // Calculate the half edge length
     result.front.length = utils::distPoint2Point(result.front.p[0], result.front.p[1]);
-    std::cout << result.front.length << std::endl;
+
     // Get half edge midpoint
     result.front.mp = utils::getMidPoint(result.front.p[0], result.front.p[1]);
 
@@ -430,42 +419,93 @@ namespace afront_meshing
     result.front.d = getGrowDirection(result.front.p[0], result.front.mp, fd);
 
     Eigen::Vector3f p3;
-
+    int cnt = 0;
+    OHEAVC circ;
     //////////////////////////
     // Check Next Half Edge //
     //////////////////////////
     result.next.type = CutEarData::NextHalfEdge;
     result.next.primary = result.front.he;
-    result.next.secondary = getNextHalfEdge(result.front.he);
-    result.next.valid = false;
-    result.next.vi[0] = result.front.vi[0];
-    result.next.vi[1] = result.front.vi[1];
-    result.next.vi[2] = mesh_.getTerminatingVertexIndex(result.next.secondary);
-    p3 = (mesh_vertex_data_[result.next.vi[2].get()]).getVector3fMap();
-    result.next.tri = getTriangleData(result.front, p3);
 
-    // Check if triangle is valid
-    if (result.next.tri.valid)
-      if (result.next.tri.a < 1.22173 && result.next.tri.b < 1.22173 && result.next.tri.c < 1.22173)
-        result.next.valid = true;
+    cnt = 0;
+    circ = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(result.front.vi[1]);
+    const OHEAVC circ_next_end = circ;
+    do
+    {
+      HalfEdgeIndex he = circ.getTargetIndex();
+      VertexIndex evi = mesh_.getTerminatingVertexIndex(he);
+      if (!mesh_.isBoundary(he))
+      {
+        he = mesh_.getOppositeHalfEdgeIndex(he);
+        if (!mesh_.isBoundary(he))
+          continue;
+      }
+
+      if (he == result.front.he)
+        continue;
+
+      p3 = (mesh_vertex_data_[evi.get()]).getVector3fMap();
+      TriangleData tri = getTriangleData(result.front, p3);
+
+      if (cnt == 0 || (cnt > 0 && tri.valid && !result.next.tri.valid) || (cnt > 0 && tri.valid && result.next.tri.valid && tri.c < result.next.tri.c))
+      {
+        result.next.secondary = he;
+        result.next.vi[0] = result.front.vi[0];
+        result.next.vi[1] = result.front.vi[1];
+        result.next.vi[2] = evi;
+        result.next.tri = tri;
+      }
+      cnt++;
+    } while (++circ != circ_next_end);
+//      OutgoingHalfEdgeAroundVertexCirculator       circ     = this->getOutgoingHalfEdgeAroundVertexCirculator (idx_vertex);
+//      const OutgoingHalfEdgeAroundVertexCirculator circ_end = circ;
+
+//      if (!this->isBoundary ((circ++).getTargetIndex ())) return (true);
+//      do
+//      {
+//        if (this->isBoundary (circ.getTargetIndex ())) return (false);
+//      } while (++circ != circ_end);
+
+//      return (true);
+
+
 
     //////////////////////////
     // Check Prev Half Edge //
     //////////////////////////
     result.prev.type = CutEarData::PrevHalfEdge;
     result.prev.primary = result.front.he;
-    result.prev.secondary = getPrevHalfEdge(result.front.he);
-    result.prev.valid = false;
-    result.prev.vi[0] = result.front.vi[0];
-    result.prev.vi[1] = result.front.vi[1];
-    result.prev.vi[2] = mesh_.getOriginatingVertexIndex(result.prev.secondary);
-    p3 = (mesh_vertex_data_[result.prev.vi[2].get()]).getVector3fMap();
-    result.prev.tri = getTriangleData(result.front, p3);
 
-    // Check if triangle is valid
-    if (result.prev.tri.valid)
-      if (result.prev.tri.a < 1.22173 && result.prev.tri.b < 1.22173 && result.prev.tri.c < 1.22173)
-        result.prev.valid = true;
+    cnt = 0;
+    circ = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(result.front.vi[0]);
+    const OHEAVC circ_prev_end = circ;
+    do
+    {
+      HalfEdgeIndex he = circ.getTargetIndex();
+      VertexIndex evi = mesh_.getTerminatingVertexIndex(he);
+      if (!mesh_.isBoundary(he))
+      {
+        he = mesh_.getOppositeHalfEdgeIndex(he);
+        if (!mesh_.isBoundary(he))
+          continue;
+      }
+
+      if (he == result.front.he)
+        continue;
+
+      p3 = (mesh_vertex_data_[evi.get()]).getVector3fMap();
+      TriangleData tri = getTriangleData(result.front, p3);
+
+      if (cnt == 0 || (cnt > 0 && tri.valid && !result.prev.tri.valid) || (cnt > 0 && tri.valid && result.prev.tri.valid && tri.b < result.prev.tri.b))
+      {
+        result.prev.secondary = he;
+        result.prev.vi[0] = result.front.vi[0];
+        result.prev.vi[1] = result.front.vi[1];
+        result.prev.vi[2] = evi;
+        result.prev.tri = tri;
+      }
+      cnt++;
+    } while (++circ != circ_prev_end);
 
     return result;
   }
@@ -494,7 +534,7 @@ namespace afront_meshing
       // TODO: Need to check triangle normals here
 
       Eigen::Vector3f pv_normal = result.pv.point.getNormalVector3fMap();
-      if (!utils::checkNormal(front.n[0], pv_normal, rho_) || !utils::checkNormal(front.n[1], pv_normal, rho_))
+      if (!utils::checkNormal(front.n[0], pv_normal, rho_/reduction_) || !utils::checkNormal(front.n[1], pv_normal, rho_/reduction_))
         result.status = PredictVertexResults::InvalidVertexNormal;
 
       // Check and see if there any point in the grow direction of the front.
@@ -518,7 +558,6 @@ namespace afront_meshing
     CloseProximityResults results;
     std::vector<int> K;
     std::vector<float> K_dist;
-    Eigen::Vector3f pv_normal = pvr.pv.point.getNormalVector3fMap();
 
     mesh_tree_->radiusSearch(pvr.pv.point, 3.0 * pvr.gdr.estimated, K, K_dist);
 
@@ -582,13 +621,10 @@ namespace afront_meshing
           continue;
         else // Check normals
         {
-          if (!utils::checkNormal(chkpt_normal, pv_normal, rho_))
+          if (!utils::checkNormal(chkpt_normal, pvr.afront.front.n[0], rho_/reduction_))
             continue;
 
-          if (!utils::checkNormal(chkpt_normal, pvr.afront.front.n[0], rho_))
-            continue;
-
-          if (!utils::checkNormal(chkpt_normal, pvr.afront.front.n[1], rho_))
+          if (!utils::checkNormal(chkpt_normal, pvr.afront.front.n[1], rho_/reduction_))
             continue;
         }
 
@@ -727,7 +763,6 @@ namespace afront_meshing
 
         // It is not suffecient ot just compare half edge indexs because non manifold mesh is allowed.
         // Must check vertex index
-        // if (he == pvr.afront.prev.secondary || he == pvr.afront.next.secondary)
         if (vi[0] == pvr.afront.front.vi[0] || vi[1] == pvr.afront.front.vi[0] || vi[0] == pvr.afront.front.vi[1] || vi[1] == pvr.afront.front.vi[1])
           continue;
 
@@ -861,7 +896,7 @@ namespace afront_meshing
 
       Eigen::Vector3f u = he_p2 - he_p1;
       Eigen::Vector3f v = fd.getNormalVector3fMap();
-      double fence_height = std::max(pvr.afront.front.length, (double)u.norm()) / 2.0;
+      double fence_height = 1.5 * pvr.gdr.estimated * hausdorff_error_;
       v = v.normalized() * fence_height;
 
       utils::IntersectionLine2PlaneResults lpr;
@@ -1045,7 +1080,7 @@ namespace afront_meshing
   {
     // Add new face
     MeshTraits::FaceData new_fd = createFaceData(pvr.tri.p[0], pvr.tri.p[1], pvr.tri.p[2]);
-    mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(pvr.pv.point), new_fd);
+    FaceIndex fi = mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(pvr.pv.point), new_fd);
 
     if (pvr.tri.B > max_edge_length_)
       max_edge_length_ = pvr.tri.B;
@@ -1054,16 +1089,16 @@ namespace afront_meshing
       max_edge_length_ = pvr.tri.C;
 
     // Add new half edges to the queue
-    addToQueue(getNextHalfEdge(pvr.afront.prev.secondary));
-    addToQueue(getPrevHalfEdge(pvr.afront.next.secondary));
+    if (!addToQueue(fi))
+      addToBoundary(pvr.afront.front.he);
   }
 
   void AfrontMeshing::merge(const TriangleToCloseResults &ttcr)
   {
-    assert(ttcr.closest != mesh_.getTerminatingVertexIndex(ttcr.pvr.afront.prev.secondary));
-    assert(ttcr.closest != mesh_.getOriginatingVertexIndex(ttcr.pvr.afront.next.secondary));
+    assert(ttcr.closest != ttcr.pvr.afront.front.vi[0]);
+    assert(ttcr.closest != ttcr.pvr.afront.front.vi[1]);
     // Need to make sure at lease one vertex of the half edge is in the grow direction
-    if (ttcr.closest == mesh_.getOriginatingVertexIndex(ttcr.pvr.afront.prev.secondary))
+    if (ttcr.closest == ttcr.pvr.afront.prev.vi[2])
     {
       #ifdef AFRONTDEBUG
       std::printf("\x1B[32m\tAborting Merge, Forced Ear Cut Opperation with Previous Half Edge!\x1B[0m\n");
@@ -1071,7 +1106,7 @@ namespace afront_meshing
       cutEar(ttcr.pvr.afront.prev);
       return;
     }
-    else if (ttcr.closest == mesh_.getTerminatingVertexIndex(ttcr.pvr.afront.next.secondary))
+    else if (ttcr.closest == ttcr.pvr.afront.next.vi[2])
     {
       #ifdef AFRONTDEBUG
       std::printf("\x1B[32m\tAborting Merge, Forced Ear Cut Opperation with Next Half Edge!\x1B[0m\n");
@@ -1087,11 +1122,11 @@ namespace afront_meshing
       max_edge_length_ = ttcr.tri.C;
 
     MeshTraits::FaceData new_fd = createFaceData(ttcr.pvr.tri.p[0], ttcr.pvr.tri.p[1], (mesh_vertex_data_[ttcr.closest.get()]).getVector3fMap());
-    mesh_.addFace(ttcr.pvr.afront.front.vi[0], ttcr.pvr.afront.front.vi[1], ttcr.closest, new_fd);
+    FaceIndex fi = mesh_.addFace(ttcr.pvr.afront.front.vi[0], ttcr.pvr.afront.front.vi[1], ttcr.closest, new_fd);
 
-    // Add new half edges to the queue
-    addToQueue(getNextHalfEdge(ttcr.pvr.afront.prev.secondary));
-    addToQueue(getPrevHalfEdge(ttcr.pvr.afront.next.secondary));
+    if (!addToQueue(fi))
+      addToBoundary(ttcr.pvr.afront.front.he);
+
   }
 
   float AfrontMeshing::getCurvature(const int &index) const
@@ -1254,10 +1289,33 @@ namespace afront_meshing
     return center_pt;
   }
 
-  void AfrontMeshing::addToQueue(const HalfEdgeIndex &half_edge)
+  void AfrontMeshing::addToQueueHelper(const HalfEdgeIndex &half_edge)
   {
     assert(std::find(queue_.begin(), queue_.end(), half_edge) == queue_.end());
     queue_.push_back(half_edge);
+  }
+
+  bool AfrontMeshing::addToQueue(const FaceIndex &face)
+  {
+    // This occures if the face is non-manifold.
+    // It appears that non-manifold vertices are allowed but not face.
+    if (mesh_.isValid(face))
+    {
+      OHEAFC circ = mesh_.getOuterHalfEdgeAroundFaceCirculator(face);
+      const OHEAFC circ_end = circ;
+      do
+      {
+        HalfEdgeIndex he = circ.getTargetIndex();
+        if (mesh_.isBoundary(he))
+          addToQueueHelper(he);
+
+      } while (++circ != circ_end);
+    }
+    else
+    {
+      std::printf("\x1B[32m\tUnable to perform merge, invalid face index!\x1B[0m\n");
+      return false;
+    }
   }
 
   void AfrontMeshing::removeFromQueue(const HalfEdgeIndex &half_edge)
@@ -1330,8 +1388,14 @@ namespace afront_meshing
   {
     if (event.getKeySym() == "i" && event.keyDown())
     {
-      pause_ = true;
-      std::printf("\x1B[36mInterupted!\x1B[0m\n");
+      while (!isFinished())
+      {
+        stepMesh();
+
+        viewer_->spinOnce(1, true);
+        viewer_->removePolygonMesh();
+        viewer_->addPolygonMesh(getMesh());
+      }
       return;
     }
 
@@ -1339,8 +1403,14 @@ namespace afront_meshing
     {
       if (!isFinished())
       {
-        stepMesh();
-
+        try
+        {
+          stepMesh();
+        }
+        catch (const std::exception& e)
+        {
+          std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
+        }
         viewer_->removePolygonMesh();
         viewer_->addPolygonMesh(getMesh());
       }
@@ -1353,11 +1423,19 @@ namespace afront_meshing
       {
         for (auto i = 0; i < 100; ++i)
         {
-          stepMesh();
-          viewer_->removePolygonMesh();
-          viewer_->addPolygonMesh(getMesh());
+          try
+          {
+            stepMesh();
+          }
+          catch (const std::exception& e)
+          {
+            std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
+            break;
+          }
         }
       }
+      viewer_->removePolygonMesh();
+      viewer_->addPolygonMesh(getMesh());
       return;
     }
 
@@ -1367,25 +1445,38 @@ namespace afront_meshing
       {
         for (auto i = 0; i < 1000; ++i)
         {
-          stepMesh();
-          viewer_->removePolygonMesh();
-          viewer_->addPolygonMesh(getMesh());
+          try
+          {
+            stepMesh();
+          }
+          catch (const std::exception& e)
+          {
+            std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
+            break;
+          }
         }
       }
+      viewer_->removePolygonMesh();
+      viewer_->addPolygonMesh(getMesh());
       return;
     }
 
     if (event.getKeySym() == "t" && event.keyDown())
     {
-      pause_ = false;
-      while (!isFinished() && !pause_)
+      while (!isFinished())
       {
-        stepMesh();
-
-        viewer_->spinOnce(1, true);
-        viewer_->removePolygonMesh();
-        viewer_->addPolygonMesh(getMesh());
+        try
+        {
+          stepMesh();
+        }
+        catch (const std::exception& e)
+        {
+          std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
+          break;
+        }
       }
+      viewer_->removePolygonMesh();
+      viewer_->addPolygonMesh(getMesh());
       return;
     }
   }

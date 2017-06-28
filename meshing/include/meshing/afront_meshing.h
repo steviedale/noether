@@ -99,7 +99,6 @@ namespace afront_meshing
       HalfEdgeIndex secondary; /**< @brief The Secondary half edge triangle (Previouse or Next) */
       VertexIndex vi[3];       /**< @brief The vertex indicies of the potential triangle */
       TriangleData tri;        /**< @brief The Triangle information */
-      bool valid;              /**< @brief Whether the triangle meets the criteria */
     };
 
     struct AdvancingFrontData
@@ -255,7 +254,8 @@ namespace afront_meshing
 
   private:
     /** @brief Add half edge to queue */
-    void addToQueue(const HalfEdgeIndex &half_edge);
+    bool addToQueue(const FaceIndex &face);
+    void addToQueueHelper(const HalfEdgeIndex &half_edge);
 
     /** @brief Remove half edge from queue */
     void removeFromQueue(const HalfEdgeIndex &half_edge);
@@ -324,25 +324,6 @@ namespace afront_meshing
     /** @brief Update the Kd Tree of the mesh vertices */
     void updateKdTree();
 
-    /** @brief Get the next half edge connected to the provided half edge. */
-    HalfEdgeIndex getNextHalfEdge(const HalfEdgeIndex &half_edge) const
-    {
-      return mesh_.getNextHalfEdgeIndex(half_edge);
-//      OutgoingHalfEdgeAroundVertexCirculator       circ     = this->getOutgoingHalfEdgeAroundVertexCirculator (idx_vertex);
-//      const OutgoingHalfEdgeAroundVertexCirculator circ_end = circ;
-
-//      if (!this->isBoundary ((circ++).getTargetIndex ())) return (true);
-//      do
-//      {
-//        if (this->isBoundary (circ.getTargetIndex ())) return (false);
-//      } while (++circ != circ_end);
-
-//      return (true);
-    }
-
-    /** @brief Get the previous half edge connected to the provided half edge. */
-    HalfEdgeIndex getPrevHalfEdge(const HalfEdgeIndex &half_edge) const {return mesh_.getPrevHalfEdgeIndex(half_edge);}
-
     /** @brief Get the curvature provided an index. */
     float getCurvature(const int &index) const;
 
@@ -406,7 +387,6 @@ namespace afront_meshing
     std::uint64_t counter_;
     mutable std::uint64_t fence_counter_;
     pcl::visualization::PCLVisualizer::Ptr viewer_;
-    bool pause_;
     #endif
   };
 } // namespace afront_meshing
