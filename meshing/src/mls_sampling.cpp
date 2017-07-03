@@ -30,6 +30,7 @@ namespace afront_meshing
       std::cout << "Error: Sample point is not finite\n";
 
     SamplePointResults result;
+    result.orig = pt;
 
     // Get 3D position of point
     //Eigen::Vector3f pos = distinct_cloud_->points[dp_i].getVector3fMap ();
@@ -111,7 +112,7 @@ namespace afront_meshing
       double Zyy = 2.0 * c;
 
       double Z = 1 + Zx * Zx + Zy * Zy;
-      double Zlen = sqrt(1 + Zx * Zx + Zy * Zy);
+      double Zlen = sqrt(Z);
       double K = (Zxx * Zyy - Zxy * Zxy) / (Z * Z);
       double H = ((1.0 + Zy * Zy) * Zxx - 2.0 * Zx * Zy * Zxy + (1.0 + Zx * Zx) * Zyy) / (2.0 * Zlen * Zlen * Zlen);
       double disc2 = H * H - K;
@@ -137,4 +138,5 @@ namespace afront_meshing
     v_disp = static_cast<float> ((point - mls_results_[index].mean).dot(mls_results_[index].v_axis));
     return calculateCurvature(u_disp, v_disp, mls_results_[index]);
   }
+
 }

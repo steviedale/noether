@@ -17,6 +17,12 @@ namespace afront_meshing
 
     finished_ = false;
     threads_ = 1;
+
+    mls_order_ = 2;
+    int nr_coeff = (mls_order_ + 1) * (mls_order_ + 2) / 2;
+    required_neighbors_ = 5 * nr_coeff;
+
+    boundary_angle_threshold_ = M_PI_2;
   }
 
   bool AfrontMeshing::initMesher(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud)
@@ -86,6 +92,7 @@ namespace afront_meshing
     mls_.setComputeNormals(true);
     mls_.setInputCloud(input_cloud_);
     mls_.setPolynomialFit(true);
+    mls_.setPolynomialOrder(mls_order_);
     mls_.setSearchMethod(input_cloud_tree_);
     mls_.setSearchRadius(r_);
 
@@ -188,7 +195,6 @@ namespace afront_meshing
     viewer_->addPointCloud<MeshTraits::VertexData>(mesh_vertex_data_copy_, single_color, "Mesh_Vertex_Cloud", 2);
 
     viewer_->addPointCloudNormals<pcl::PointNormal>(mesh_vertex_data_copy_, 1, 0.005, "Mesh_Vertex_Cloud_Normals", 4);
-//    viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0, 0, 255, "Mesh_Vertex_Cloud_Normals", 2);
     #endif
 
     if (mesh_.getOppositeFaceIndex(afront.next.secondary) != mesh_.getOppositeFaceIndex(afront.prev.secondary) && afront.next.vi[2] == afront.prev.vi[2]) // This indicates a closed area
@@ -196,9 +202,10 @@ namespace afront_meshing
       #ifdef AFRONTDEBUG
       std::printf("\x1B[34m  Closing Area\x1B[0m\n");
       #endif
-      MeshTraits::FaceData new_fd = createFaceData((mesh_vertex_data_[afront.prev.vi[0].get()]).getVector3fMap(),
-                                                   (mesh_vertex_data_[afront.prev.vi[1].get()]).getVector3fMap(),
-                                                   (mesh_vertex_data_[afront.prev.vi[2].get()]).getVector3fMap());
+      MeshTraits::FaceData new_fd = createFaceData(afront.next.tri);
+      // TODO: Need to check face normal to vertex normal. If not consistant to merge triangles together.
+      //       This function has not been written yet. But it should look at the surrounding triangle and
+      //       determine how to merge them.
 
       mesh_.addFace(afront.prev.vi[0], afront.prev.vi[1], afront.prev.vi[2], new_fd);
       removeFromQueue(afront.prev.secondary, afront.next.secondary);
@@ -208,67 +215,96 @@ namespace afront_meshing
     {
       // If we can not cut ear then try and grow.
       PredictVertexResults pvr = predictVertex(afront);
-      switch (pvr.status)
+
+      #ifdef AFRONTDEBUG
+      Eigen::Vector3f mean_pt = (mls_cloud_->at(pvr.pv.closest)).getVector3fMap();
+      Eigen::Vector3f projected_pt = pvr.pv.point.getVector3fMap();
+      viewer_->addSphere(utils::convertEigenToPCL(mean_pt), r_, 0, 255, 128, "MLSRadius", 4);
+      viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSRadius", 4);
+
+      viewer_->addSphere(utils::convertEigenToPCL(pvr.pv.mls.mean), 0.02 * r_, 255, 0, 0, "MLSMean", 4);
+      viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSMean", 4);
+
+      viewer_->addSphere(utils::convertEigenToPCL(projected_pt), 0.02 * r_, 255, 128, 0, "MLSProjection", 4);
+      viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSProjection", 4);
+
+      p3 = utils::convertEigenToPCL(pvr.tri.p[2]);
+      viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p1, p3, 0, 255, 0, "RightSide", 1);       // Green
+      viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p2, p3, 0, 255, 0, "LeftSide", 1);        // Green
+      viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "RightSide", 1);
+      viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "LeftSide", 1);
+      #endif
+
+      if (pvr.status == PredictVertexResults::InvalidMLSResults)
       {
-        case (PredictVertexResults::AtBoundary):
+        #ifdef AFRONTDEBUG
+        std::printf("\x1B[31m  Invalid MLS Results for nearest point!\x1B[0m\n");
+        #endif
+        boundary_.push_back(afront.front.he);
+      }
+      else if (pvr.status == PredictVertexResults::InvalidProjection)
+      {
+        #ifdef AFRONTDEBUG
+        std::printf("\x1B[31m  Invalid Projection!\x1B[0m\n");
+        #endif
+        boundary_.push_back(afront.front.he);
+      }
+      else if (pvr.status == PredictVertexResults::AtBoundary)
+      {
+        #ifdef AFRONTDEBUG
+        std::printf("\x1B[36m  At Point Cloud Boundary!\x1B[0m\n");
+        #endif
+        boundary_.push_back(afront.front.he);
+      }
+      else if (pvr.status == PredictVertexResults::InvalidStepSize)
+      {
+        #ifdef AFRONTDEBUG
+        std::printf("\x1B[31m  Calculated Invalid Step Size!\x1B[0m\n");
+        #endif
+        boundary_.push_back(afront.front.he);
+      }
+      else
+      {
+        TriangleToCloseResults ttcr = isTriangleToClose(pvr);
+        if (!ttcr.found)
         {
-          #ifdef AFRONTDEBUG
-          std::printf("\x1B[32m  At Point Cloud Boundary!\x1B[0m\n");
-          #endif
-          boundary_.push_back(afront.front.he);
-          break;
-        }
-        case (PredictVertexResults::InvalidStepSize):
-        {
-          #ifdef AFRONTDEBUG
-          std::printf("\x1B[32m  Calculated Invalid Step Size!\x1B[0m\n");
-          #endif
-          boundary_.push_back(afront.front.he);
-          break;
-        }
-        case (PredictVertexResults::InvalidVertexNormal):
-        {
-          #ifdef AFRONTDEBUG
-          std::printf("\x1B[32m  Projection point has inconsistant vertex normal!\x1B[0m\n");
-          #endif
-          boundary_.push_back(afront.front.he);
-          break;
-        }
-        case (PredictVertexResults::InvalidTriangleNormal):
-        {
-          #ifdef AFRONTDEBUG
-          std::printf("\x1B[32m  Triangle normal is inconsistant with vertex normals!\x1B[0m\n");
-          #endif
-          boundary_.push_back(afront.front.he);
-          break;
-        }
-        case (PredictVertexResults::Valid):
-        {
-          #ifdef AFRONTDEBUG
-          Eigen::Vector3f mean_pt = (mls_cloud_->at(pvr.pv.closest)).getVector3fMap();
-          Eigen::Vector3f projected_pt = pvr.pv.point.getVector3fMap();
-          viewer_->addSphere(utils::convertEigenToPCL(mean_pt), r_, 0, 255, 128, "MLSRadius", 4);
-          viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSRadius", 4);
-
-          viewer_->addSphere(utils::convertEigenToPCL(pvr.pv.mls.mean), 0.02 * r_, 255, 0, 0, "MLSMean", 4);
-          viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSMean", 4);
-
-          viewer_->addSphere(utils::convertEigenToPCL(projected_pt), 0.02 * r_, 255, 128, 0, "MLSProjection", 4);
-          viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSProjection", 4);
-
-          p3 = utils::convertEigenToPCL(pvr.tri.p[2]);
-          viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p1, p3, 0, 255, 0, "RightSide", 1);       // Green
-          viewer_->addLine<pcl::PointXYZ, pcl::PointXYZ>(p2, p3, 0, 255, 0, "LeftSide", 1);        // Green
-          viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "RightSide", 1);
-          viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "LeftSide", 1);
-          #endif
-          TriangleToCloseResults ttcr = isTriangleToClose(pvr);
-          if (!ttcr.found)
+          if (pvr.status == PredictVertexResults::Valid)
           {
             #ifdef AFRONTDEBUG
             std::printf("\x1B[32m  Performed Grow Opperation\x1B[0m\n");
             #endif
             grow(pvr);
+          }
+          else if (pvr.status == PredictVertexResults::InvalidVertexNormal)
+          {
+            #ifdef AFRONTDEBUG
+            std::printf("\x1B[31m  Projection point has inconsistant vertex normal!\x1B[0m\n");
+            #endif
+            boundary_.push_back(afront.front.he);
+          }
+          else if (pvr.status == PredictVertexResults::InvalidTriangleNormal)
+          {
+            #ifdef AFRONTDEBUG
+            std::printf("\x1B[31m  Projection point triangle normal is inconsistant with vertex normals!\x1B[0m\n");
+            #endif
+            boundary_.push_back(afront.front.he);
+          }
+        }
+        else
+        {
+          if (!ttcr.tri.vertex_normals_valid)
+          {
+            #ifdef AFRONTDEBUG
+            std::printf("\x1B[31m  Closest point has inconsistant vertex normal!\x1B[0m\n");
+            #endif
+            boundary_.push_back(afront.front.he);
+          }
+          else if (!ttcr.tri.triangle_normal_valid)
+          {
+            #ifdef AFRONTDEBUG
+            std::printf("\x1B[31m  Closest point triangle normal is inconsistant with vertex normals!\x1B[0m\n");
+            #endif
+            boundary_.push_back(afront.front.he);
           }
           else
           {
@@ -277,7 +313,6 @@ namespace afront_meshing
             #endif
             merge(ttcr);
           }
-          break;
         }
       }
     }
@@ -357,7 +392,18 @@ namespace afront_meshing
     utils::alignNormal(sp2.point, sp1.point);
     utils::alignNormal(sp3.point, sp1.point);
 
-    MeshTraits::FaceData fd = createFaceData(p1, p2, p3);
+    MeshTraits::FaceData fd;
+    Eigen::Vector3f center = (p1 + p2 + p3)/ 3;
+    Eigen::Vector3f normal = ((p2 - p1).cross(p3 - p1)).normalized();
+    utils::alignNormal(normal, sp1.point.getNormalVector3fMap());
+
+    fd.x = center(0);
+    fd.y = center(1);
+    fd.z = center(2);
+    fd.normal_x = normal(0);
+    fd.normal_y = normal(1);
+    fd.normal_z = normal(2);
+
     VertexIndices vi;
     vi.push_back(mesh_.addVertex(sp1.point));
     vi.push_back(mesh_.addVertex(sp2.point));
@@ -368,18 +414,14 @@ namespace afront_meshing
 
   void AfrontMeshing::cutEar(const CutEarData &ccer)
   {
-    assert(ccer.tri.valid);
+    assert(ccer.tri.point_valid);
     if (ccer.tri.B > max_edge_length_)
       max_edge_length_ = ccer.tri.B;
 
     if (ccer.tri.C > max_edge_length_)
       max_edge_length_ = ccer.tri.C;
 
-    MeshTraits::FaceData new_fd = createFaceData((mesh_vertex_data_[ccer.vi[0].get()]).getVector3fMap(),
-                                                 (mesh_vertex_data_[ccer.vi[1].get()]).getVector3fMap(),
-                                                 (mesh_vertex_data_[ccer.vi[2].get()]).getVector3fMap());
-
-
+    MeshTraits::FaceData new_fd = createFaceData(ccer.tri);
     FaceIndex fi = mesh_.addFace(ccer.vi[0], ccer.vi[1], ccer.vi[2], new_fd);
 
     if (addToQueue(fi))
@@ -418,96 +460,102 @@ namespace afront_meshing
     // Calculate the grow direction vector
     result.front.d = getGrowDirection(result.front.p[0], result.front.mp, fd);
 
-    Eigen::Vector3f p3;
-    int cnt = 0;
-    OHEAVC circ;
-    //////////////////////////
-    // Check Next Half Edge //
-    //////////////////////////
-    result.next.type = CutEarData::NextHalfEdge;
-    result.next.primary = result.front.he;
+    // Check Next Half Edge
+    result.next = getNextHalfEdge(result.front);
 
-    cnt = 0;
-    circ = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(result.front.vi[1]);
-    const OHEAVC circ_next_end = circ;
-    do
-    {
-      HalfEdgeIndex he = circ.getTargetIndex();
-      VertexIndex evi = mesh_.getTerminatingVertexIndex(he);
-      if (!mesh_.isBoundary(he))
-      {
-        he = mesh_.getOppositeHalfEdgeIndex(he);
-        if (!mesh_.isBoundary(he))
-          continue;
-      }
-
-      if (he == result.front.he)
-        continue;
-
-      p3 = (mesh_vertex_data_[evi.get()]).getVector3fMap();
-      TriangleData tri = getTriangleData(result.front, p3);
-
-      if (cnt == 0 || (cnt > 0 && tri.valid && !result.next.tri.valid) || (cnt > 0 && tri.valid && result.next.tri.valid && tri.c < result.next.tri.c))
-      {
-        result.next.secondary = he;
-        result.next.vi[0] = result.front.vi[0];
-        result.next.vi[1] = result.front.vi[1];
-        result.next.vi[2] = evi;
-        result.next.tri = tri;
-      }
-      cnt++;
-    } while (++circ != circ_next_end);
-//      OutgoingHalfEdgeAroundVertexCirculator       circ     = this->getOutgoingHalfEdgeAroundVertexCirculator (idx_vertex);
-//      const OutgoingHalfEdgeAroundVertexCirculator circ_end = circ;
-
-//      if (!this->isBoundary ((circ++).getTargetIndex ())) return (true);
-//      do
-//      {
-//        if (this->isBoundary (circ.getTargetIndex ())) return (false);
-//      } while (++circ != circ_end);
-
-//      return (true);
-
-
-
-    //////////////////////////
-    // Check Prev Half Edge //
-    //////////////////////////
-    result.prev.type = CutEarData::PrevHalfEdge;
-    result.prev.primary = result.front.he;
-
-    cnt = 0;
-    circ = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(result.front.vi[0]);
-    const OHEAVC circ_prev_end = circ;
-    do
-    {
-      HalfEdgeIndex he = circ.getTargetIndex();
-      VertexIndex evi = mesh_.getTerminatingVertexIndex(he);
-      if (!mesh_.isBoundary(he))
-      {
-        he = mesh_.getOppositeHalfEdgeIndex(he);
-        if (!mesh_.isBoundary(he))
-          continue;
-      }
-
-      if (he == result.front.he)
-        continue;
-
-      p3 = (mesh_vertex_data_[evi.get()]).getVector3fMap();
-      TriangleData tri = getTriangleData(result.front, p3);
-
-      if (cnt == 0 || (cnt > 0 && tri.valid && !result.prev.tri.valid) || (cnt > 0 && tri.valid && result.prev.tri.valid && tri.b < result.prev.tri.b))
-      {
-        result.prev.secondary = he;
-        result.prev.vi[0] = result.front.vi[0];
-        result.prev.vi[1] = result.front.vi[1];
-        result.prev.vi[2] = evi;
-        result.prev.tri = tri;
-      }
-      cnt++;
-    } while (++circ != circ_prev_end);
+    // Check Prev Half Edge
+    result.prev = getPrevHalfEdge(result.front);
 
     return result;
+  }
+
+  AfrontMeshing::CutEarData AfrontMeshing::getNextHalfEdge(const FrontData &front) const
+  {
+    CutEarData next;
+    next.type = CutEarData::NextHalfEdge;
+    next.primary = front.he;
+    next.secondary = mesh_.getNextHalfEdgeIndex(front.he);
+    next.vi[0] = front.vi[0];
+    next.vi[1] = front.vi[1];
+    next.vi[2] = mesh_.getTerminatingVertexIndex(next.secondary);
+    next.tri = getTriangleData(front, mesh_vertex_data_[next.vi[2].get()]);
+
+    OHEAVC circ_next = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(front.vi[1]);
+    const OHEAVC circ_next_end = circ_next;
+    do
+    {
+      HalfEdgeIndex he = circ_next.getTargetIndex();
+      if (!mesh_.isValid(he))
+        continue;
+
+      VertexIndex evi = mesh_.getTerminatingVertexIndex(he);
+      if (!mesh_.isBoundary(he))
+      {
+        he = mesh_.getOppositeHalfEdgeIndex(he);
+        if (!mesh_.isBoundary(he))
+          continue;
+      }
+
+      if (he == front.he)
+        continue;
+
+      TriangleData tri = getTriangleData(front, mesh_vertex_data_[evi.get()]);
+      if ((tri.point_valid && !next.tri.point_valid) || (tri.point_valid && next.tri.point_valid && tri.c < next.tri.c))
+      {
+        next.secondary = he;
+        next.vi[0] = front.vi[0];
+        next.vi[1] = front.vi[1];
+        next.vi[2] = evi;
+        next.tri = tri;
+      }
+    } while (++circ_next != circ_next_end);
+
+    return next;
+  }
+
+  AfrontMeshing::CutEarData AfrontMeshing::getPrevHalfEdge(const FrontData &front) const
+  {
+    CutEarData prev;
+    prev.type = CutEarData::PrevHalfEdge;
+    prev.primary = front.he;
+    prev.secondary = mesh_.getPrevHalfEdgeIndex(front.he);
+    prev.vi[0] = front.vi[0];
+    prev.vi[1] = front.vi[1];
+    prev.vi[2] = mesh_.getOriginatingVertexIndex(prev.secondary);
+    prev.tri = getTriangleData(front, mesh_vertex_data_[prev.vi[2].get()]);
+
+    OHEAVC circ_prev = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(front.vi[0]);
+    const OHEAVC circ_prev_end = circ_prev;
+    do
+    {
+      HalfEdgeIndex he = circ_prev.getTargetIndex();
+      if (!mesh_.isValid(he))
+        continue;
+
+      VertexIndex evi = mesh_.getTerminatingVertexIndex(he);
+      if (!mesh_.isBoundary(he))
+      {
+        he = mesh_.getOppositeHalfEdgeIndex(he);
+        if (!mesh_.isBoundary(he))
+          continue;
+      }
+
+      if (he == front.he)
+        continue;
+
+      TriangleData tri = getTriangleData(front, mesh_vertex_data_[evi.get()]);
+
+      if ((tri.point_valid && !prev.tri.point_valid) || (tri.point_valid && prev.tri.point_valid && tri.b < prev.tri.b))
+      {
+        prev.secondary = he;
+        prev.vi[0] = front.vi[0];
+        prev.vi[1] = front.vi[1];
+        prev.vi[2] = evi;
+        prev.tri = tri;
+      }
+    } while (++circ_prev != circ_prev_end);
+
+    return prev;
   }
 
   AfrontMeshing::PredictVertexResults AfrontMeshing::predictVertex(const AdvancingFrontData &afront) const
@@ -528,29 +576,44 @@ namespace afront_meshing
       // Get predicted vertex
       result.pv = getPredictedVertex(front.mp, front.d, result.gdr.l);
       utils::alignNormal(result.pv.point, mesh_vertex_data_[afront.front.vi[0].get()]);
+      if (result.pv.mls.num_neighbors < required_neighbors_) // Maybe we should use the 5 * DOF that PCL uses
+      {
+        result.status = PredictVertexResults::InvalidMLSResults;
+        return result;
+      }
 
-      // Get triangle Data
-      result.tri = getTriangleData(front, result.pv.point.getVector3fMap());
-      // TODO: Need to check triangle normals here
-
-      Eigen::Vector3f pv_normal = result.pv.point.getNormalVector3fMap();
-      if (!utils::checkNormal(front.n[0], pv_normal, rho_/reduction_) || !utils::checkNormal(front.n[1], pv_normal, rho_/reduction_))
-        result.status = PredictVertexResults::InvalidVertexNormal;
+      // Check if the projected point is to far from the original point.
+      double dist = utils::distPoint2Point(result.pv.orig.getVector3fMap(), result.pv.point.getVector3fMap());
+      if (dist > result.gdr.estimated)
+      {
+        result.status = PredictVertexResults::InvalidProjection;
+        return result;
+      }
 
       // Check and see if there any point in the grow direction of the front.
       // If not then it is at the boundary of the point cloud.
-      Eigen::Vector3f closest = (mls_cloud_->at(result.pv.closest)).getVector3fMap();
-      if (nearBoundary(front, closest))
+      if (nearBoundary(front, result.pv.closest))
+      {
         result.status = PredictVertexResults::AtBoundary;
+        return result;
+      }
 
+      // Get triangle Data
+      result.tri = getTriangleData(front, result.pv.point);
+      if (!result.tri.point_valid)
+        result.status = PredictVertexResults::InvalidProjection;
+      else if(!result.tri.vertex_normals_valid)
+        result.status = PredictVertexResults::InvalidVertexNormal;
+      else if (!result.tri.triangle_normal_valid)
+        result.status = PredictVertexResults::InvalidTriangleNormal;
 
+      return result;
     }
     else
     {
       result.status = PredictVertexResults::InvalidStepSize;
+      return result;
     }
-
-    return result;
   }
 
   AfrontMeshing::CloseProximityResults AfrontMeshing::isCloseProximity(const PredictVertexResults &pvr) const
@@ -577,8 +640,8 @@ namespace afront_meshing
 
       if (mesh_.isBoundary(vi))
       {
-        Eigen::Vector3f chkpt = mesh_vertex_data_[vi.get()].getVector3fMap();
-        Eigen::Vector3f chkpt_normal = mesh_vertex_data_[vi.get()].getNormalVector3fMap();
+        pcl::PointNormal chkpn = mesh_vertex_data_[vi.get()];
+        Eigen::Vector3f chkpt = chkpn.getVector3fMap();
         bool chkpt_valid = isPointValid(pvr.afront.front, chkpt);
 
         OHEAVC       circ     = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(vi);
@@ -619,31 +682,28 @@ namespace afront_meshing
 
         if (!chkpt_valid)
           continue;
-        else // Check normals
-        {
-          if (!utils::checkNormal(chkpt_normal, pvr.afront.front.n[0], rho_/reduction_))
-            continue;
-
-          if (!utils::checkNormal(chkpt_normal, pvr.afront.front.n[1], rho_/reduction_))
-            continue;
-        }
 
         double dist = utils::distPoint2Point(pvr.tri.p[2], chkpt);
         results.verticies.push_back(vi);
         if (dist < 0.5 * pvr.gdr.estimated)
         {
+          TriangleData tri = getTriangleData(pvr.afront.front, chkpn);
           if (!results.found)
           {
             results.found = true;
             results.dist = dist;
             results.closest = vi;
+            results.tri = tri;
           }
           else
           {
-            if (dist < results.dist)
+            if ((results.tri.valid && tri.valid && dist < results.dist) ||
+                (!results.tri.valid && !tri.valid && dist < results.dist) ||
+                (!results.tri.valid && tri.valid))
             {
               results.dist = dist;
               results.closest = vi;
+              results.tri = tri;
             }
           }
         }
@@ -714,9 +774,10 @@ namespace afront_meshing
 
     // If either the prev or next half edge vertice is with in tolerance default to it
     // over closest distant point.
-    double prev_dist = utils::distPoint2Point(pvr.tri.p[2], pvr.afront.prev.tri.p[2]);
-    double next_dist = utils::distPoint2Point(pvr.tri.p[2], pvr.afront.next.tri.p[2]);
-    if (pvr.afront.prev.tri.valid && pvr.afront.next.tri.valid)
+    // TODO: Should we be checking if triangle normals are valid?  
+    double prev_dist = utils::distPoint2Line(pvr.afront.prev.tri.p[0], pvr.afront.prev.tri.p[2], pvr.tri.p[2]).d;
+    double next_dist = utils::distPoint2Line(pvr.afront.next.tri.p[1], pvr.afront.next.tri.p[2], pvr.tri.p[2]).d;
+    if (pvr.afront.prev.tri.point_valid && pvr.afront.next.tri.point_valid)
     {
       if (prev_dist < next_dist)
       {
@@ -725,6 +786,7 @@ namespace afront_meshing
           results.found = true;
           results.dist = prev_dist;
           results.closest = pvr.afront.prev.vi[2];
+          results.tri = pvr.afront.prev.tri;
         }
       }
       else
@@ -734,20 +796,23 @@ namespace afront_meshing
           results.found = true;
           results.dist = next_dist;
           results.closest = pvr.afront.next.vi[2];
+          results.tri = pvr.afront.next.tri;
         }
       }
     }
-    else if (pvr.afront.prev.tri.valid && prev_dist < 0.5 * pvr.gdr.estimated)
+    else if (pvr.afront.prev.tri.point_valid && prev_dist < 0.5 * pvr.gdr.estimated)
     {
       results.found = true;
       results.dist = prev_dist;
       results.closest = pvr.afront.prev.vi[2];
+      results.tri = pvr.afront.prev.tri;
     }
-    else if (pvr.afront.next.tri.valid && next_dist < 0.5 * pvr.gdr.estimated)
+    else if (pvr.afront.next.tri.point_valid && next_dist < 0.5 * pvr.gdr.estimated)
     {
       results.found = true;
       results.dist = next_dist;
       results.closest = pvr.afront.next.vi[2];
+      results.tri = pvr.afront.next.tri;
     }
 
     // If Nothing found check and make sure new vertex is not close to fence
@@ -761,7 +826,7 @@ namespace afront_meshing
         vi[0] = mesh_.getOriginatingVertexIndex(he);
         vi[1] = mesh_.getTerminatingVertexIndex(he);
 
-        // It is not suffecient ot just compare half edge indexs because non manifold mesh is allowed.
+        // It is not suffecient to just compare half edge indexs because non manifold mesh is allowed.
         // Must check vertex index
         if (vi[0] == pvr.afront.front.vi[0] || vi[1] == pvr.afront.front.vi[0] || vi[0] == pvr.afront.front.vi[1] || vi[1] == pvr.afront.front.vi[1])
           continue;
@@ -778,6 +843,8 @@ namespace afront_meshing
           int index;
           if (check_p1 && check_p2)
           {
+            // TODO: Should check if triangle is valid for these points. If both are then check distance
+            //       otherwise use the one that creates a valid triangle.
             if (utils::distPoint2Point(p1, pvr.tri.p[2]) < utils::distPoint2Point(p2, pvr.tri.p[2]))
               index = 0;
             else
@@ -797,12 +864,14 @@ namespace afront_meshing
             results.found = true;
             results.dist = dist.d;
             results.closest = vi[index];
+            results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_[results.closest.get()]);
           }
           else
           {
             results.found = true;
             results.dist = dist.d;
             results.closest = vi[index];
+            results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_[results.closest.get()]);
           }
         }
       }
@@ -821,7 +890,7 @@ namespace afront_meshing
   bool AfrontMeshing::checkPrevNextHalfEdge(const AdvancingFrontData &afront, TriangleData &tri, VertexIndex &vi) const
   {
     if (mesh_.isValid(vi) && vi == afront.prev.vi[2])
-      if (afront.next.tri.valid && tri.c >= afront.next.tri.c)
+      if (afront.next.tri.point_valid && tri.c >= afront.next.tri.c)
       {
         vi = afront.next.vi[2];
         tri = afront.next.tri;
@@ -829,14 +898,14 @@ namespace afront_meshing
       }
 
     if (mesh_.isValid(vi) && vi == afront.next.vi[2])
-      if (afront.prev.tri.valid && tri.b >= afront.prev.tri.b)
+      if (afront.prev.tri.point_valid && tri.b >= afront.prev.tri.b)
       {
         vi = afront.prev.vi[2];
         tri = afront.prev.tri;
         return true;
       }
 
-    if ((afront.next.tri.valid && tri.c >= afront.next.tri.c) && (afront.prev.tri.valid && tri.b >= afront.prev.tri.b))
+    if ((afront.next.tri.point_valid && tri.c >= afront.next.tri.c) && (afront.prev.tri.point_valid && tri.b >= afront.prev.tri.b))
     {
       if (afront.next.tri.c < afront.prev.tri.b)
       {
@@ -851,13 +920,13 @@ namespace afront_meshing
         return true;
       }
     }
-    else if (afront.next.tri.valid && tri.c >= afront.next.tri.c)
+    else if (afront.next.tri.point_valid && tri.c >= afront.next.tri.c)
     {
       vi = afront.next.vi[2];
       tri = afront.next.tri;
       return true;
     }
-    else if (afront.prev.tri.valid && tri.b >= afront.prev.tri.b)
+    else if (afront.prev.tri.point_valid && tri.b >= afront.prev.tri.b)
     {
       vi = afront.prev.vi[2];
       tri = afront.prev.tri;
@@ -873,7 +942,6 @@ namespace afront_meshing
     FenceViolationResults results;
     results.found = false;
     Eigen::Vector3f sp = mesh_vertex_data_[vi.get()].getVector3fMap();
-//    double fence_height = hausdorff_error_ * max_edge_length_;
 
     for(auto i = 0; i < fences.size(); ++i)
     {
@@ -895,12 +963,16 @@ namespace afront_meshing
       MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(fences[i]).get()];
 
       Eigen::Vector3f u = he_p2 - he_p1;
-      Eigen::Vector3f v = fd.getNormalVector3fMap();
-      double fence_height = 1.5 * pvr.gdr.estimated * hausdorff_error_;
-      v = v.normalized() * fence_height;
+      Eigen::Vector3f n = fd.getNormalVector3fMap();
+      double fence_height = pvr.gdr.estimated * hausdorff_error_;
+      Eigen::Vector3f v = n * fence_height;
+
+      // Project the line on to the triangle plane. Note this is different from the paper
+      Eigen::Vector3f sp_proj = sp - (sp - he_p1).dot(n) * n;
+      Eigen::Vector3f ep_proj = p - (p - he_p1).dot(n) * n;
 
       utils::IntersectionLine2PlaneResults lpr;
-      lpr = utils::intersectionLine2Plane(sp, p, he_p1, u, v);
+      lpr = utils::intersectionLine2Plane(sp_proj, ep_proj, he_p1, u, v);
 
       if (!lpr.parallel) // May need to add additional check if parallel
         if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
@@ -948,7 +1020,7 @@ namespace afront_meshing
     if (results.found)
     {
       results.closest = cpr.closest;
-      results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_[results.closest.get()].getVector3fMap());
+      results.tri = cpr.tri;
     }
 
     // Check if the proposed triangle interfers with the prev or next half edge
@@ -1011,6 +1083,8 @@ namespace afront_meshing
         int index;
         if (vp1 && vp2)
         {
+          // TODO: Should check if triangle is valid for these points. If both are then check distance
+          //       otherwise use the one that creates a valid triangle.
           double dist1 = utils::distPoint2Line(pvr.afront.front.p[0], pvr.afront.front.p[1], fp[0]).d;
           double dist2 = utils::distPoint2Line(pvr.afront.front.p[0], pvr.afront.front.p[1], fp[1]).d;
           if (dist1 < dist2)
@@ -1024,7 +1098,7 @@ namespace afront_meshing
           index = 1;
 
         results.closest = fvi[index];
-        results.tri = getTriangleData(pvr.afront.front, fp[index]);
+        results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_[results.closest.get()]);
 
         checkPrevNextHalfEdge(pvr.afront, results.tri, results.closest);
       }
@@ -1063,15 +1137,85 @@ namespace afront_meshing
     return false;
   }
 
-  bool AfrontMeshing::nearBoundary(const FrontData &front, const Eigen::Vector3f p) const
+  bool AfrontMeshing::isBoundaryPoint(const int index) const
   {
+    pcl::PointNormal closest = mls_cloud_->at(index);
+
+    Eigen::Vector4f u;
+    Eigen::Vector4f v;
+    std::vector<int> K;
+    std::vector<float> K_dist;
+
+    u << mls_.getMLSResult(index).u_axis.cast<float>().array(), 0.0;
+    v << mls_.getMLSResult(index).v_axis.cast<float>().array(), 0.0;
+
+    // Need to modify mls library to store indicies instead of just the number of neighbors
+    mls_cloud_tree_->radiusSearch(closest, r_, K, K_dist);
+
+    if (K.size () < 3)
+      return (false);
+
+    if (!pcl_isfinite (closest.x) || !pcl_isfinite (closest.y) || !pcl_isfinite (closest.z))
+      return (false);
+
+    // Compute the angles between each neighboring point and the query point itself
+    std::vector<float> angles (K.size ());
+    float max_dif = FLT_MIN, dif;
+    int cp = 0;
+
+    for (size_t i = 0; i < K.size (); ++i)
+    {
+      if (!pcl_isfinite (mls_cloud_->points[K[i]].x) ||
+          !pcl_isfinite (mls_cloud_->points[K[i]].y) ||
+          !pcl_isfinite (mls_cloud_->points[K[i]].z))
+        continue;
+
+      Eigen::Vector4f delta = mls_cloud_->points[K[i]].getVector4fMap () - closest.getVector4fMap ();
+      if (delta == Eigen::Vector4f::Zero())
+        continue;
+
+      angles[cp++] = atan2f (v.dot (delta), u.dot (delta)); // the angles are fine between -PI and PI too
+    }
+    if (cp == 0)
+      return (false);
+
+    angles.resize (cp);
+    std::sort (angles.begin (), angles.end ());
+
+    // Compute the maximal angle difference between two consecutive angles
+    for (size_t i = 0; i < angles.size () - 1; ++i)
+    {
+      dif = angles[i + 1] - angles[i];
+      if (max_dif < dif)
+        max_dif = dif;
+    }
+
+    // Get the angle difference between the last and the first
+    dif = 2 * static_cast<float> (M_PI) - angles[angles.size () - 1] + angles[0];
+    if (max_dif < dif)
+      max_dif = dif;
+
+    // Check results
+    if (max_dif > boundary_angle_threshold_)
+      return (true);
+    else
+      return (false);
+  }
+
+  bool AfrontMeshing::nearBoundary(const FrontData &front, const int index) const
+  {
+    pcl::PointNormal closest = mls_cloud_->at(index);
+
     Eigen::Vector3f v1 = (front.p[1] - front.mp).normalized();
-    Eigen::Vector3f v2 = p - front.mp;
+    Eigen::Vector3f v2 = closest.getVector3fMap() - front.mp;
     double dot1 = v2.dot(front.d);
     double dot2 = v2.dot(v1);
 
     if ((dot1 > 0.0) && (std::abs(dot2) <= front.length/2.0))
       return false;
+
+    // Try the pcl boundary search only if the simple check says it is a boundary
+    return isBoundaryPoint(index);
 
     return true;
   }
@@ -1079,7 +1223,7 @@ namespace afront_meshing
   void AfrontMeshing::grow(const PredictVertexResults &pvr)
   {
     // Add new face
-    MeshTraits::FaceData new_fd = createFaceData(pvr.tri.p[0], pvr.tri.p[1], pvr.tri.p[2]);
+    MeshTraits::FaceData new_fd = createFaceData(pvr.tri);
     FaceIndex fi = mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(pvr.pv.point), new_fd);
 
     if (pvr.tri.B > max_edge_length_)
@@ -1121,7 +1265,7 @@ namespace afront_meshing
     if (ttcr.tri.C > max_edge_length_)
       max_edge_length_ = ttcr.tri.C;
 
-    MeshTraits::FaceData new_fd = createFaceData(ttcr.pvr.tri.p[0], ttcr.pvr.tri.p[1], (mesh_vertex_data_[ttcr.closest.get()]).getVector3fMap());
+    MeshTraits::FaceData new_fd = createFaceData(ttcr.tri);
     FaceIndex fi = mesh_.addFace(ttcr.pvr.afront.front.vi[0], ttcr.pvr.afront.front.vi[1], ttcr.closest, new_fd);
 
     if (!addToQueue(fi))
@@ -1170,8 +1314,7 @@ namespace afront_meshing
     pn.y = p(1);
     pn.z = p(2);
 
-    // What is shown in the afront paper. Need to figure out how to transverse the kdtree because
-    // this could result in not enought point to meet the criteria.
+    // What is shown in the afront paper. Need to figure out how to transverse the kdtree.
     double len = std::numeric_limits<double>::max();
     double radius = 0;
     int j = 0;
@@ -1182,6 +1325,10 @@ namespace afront_meshing
       int cnt = mls_cloud_tree_->radiusSearch(pn, (j + 1) * r_, k, k_dist);
       for(int i = pcnt; i < cnt; ++i)
       {
+        int neighbors = mls_.getMLSResult(i).num_neighbors;
+        if (neighbors < required_neighbors_)
+          continue;
+
         float curvature = getCurvature(k[i]);
         double ideal = 2.0 * std::sin(rho_ / 2.0) / curvature;
 
@@ -1200,12 +1347,14 @@ namespace afront_meshing
       if (finished)
         break;
 
-      pcnt = cnt - 1;
+      if (cnt != 0)
+        pcnt = cnt - 1;
+
       ++j;
     }
 
     if (!finished)
-      std::printf("\x1B[32m  Warning Max Step Not Found!\x1B[0m\n");
+      std::printf("\x1B[32m  Warning Max Step Not Found! Length: %f\x1B[0m\n", len);
 
     return len;
   }
@@ -1218,13 +1367,18 @@ namespace afront_meshing
     return mls_.samplePoint(pcl::PointXYZ(p(0), p(1), p(2)));
   }
 
-  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const Eigen::Vector3f p3) const
+  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const pcl::PointNormal p) const
   {
     TriangleData result;
     Eigen::Vector3f v1, v2, v3, cross;
     double dot, sina, cosa, top, bottom, area;
+    Eigen::Vector3f p3 = p.getArray3fMap();
+    Eigen::Vector3f p3_normal = p.getNormalVector3fMap();
 
-    result.valid = true;
+    result.valid = false;
+    result.point_valid = true;
+    result.vertex_normals_valid = true;
+    result.triangle_normal_valid = true;
 
     v1 = front.p[1] - front.p[0];
     v2 = p3 - front.p[1];
@@ -1232,7 +1386,7 @@ namespace afront_meshing
 
     dot = v2.dot(front.d);
     if (dot <= 0.0)
-      result.valid = false;
+      result.point_valid = false;
 
     result.A = v1.norm();
     result.B = v2.norm();
@@ -1243,14 +1397,29 @@ namespace afront_meshing
     cross = v1.cross(v3);
     bottom = result.A * result.C;
     top = cross.norm();
-    sina = cross.norm()/bottom;
+    sina = top/bottom;
     cosa = dot/bottom;
     result.b = atan2(sina, cosa);
 
     area = 0.5 * top;
     result.aspect_ratio = (4 * area * std::sqrt(3)) / (result.A * result.A + result.B * result.B + result.C * result.C);
+    result.normal = cross.normalized();
+    utils::alignNormal(result.normal, front.n[0]);
+    assert(!std::isnan(result.normal[0]));
 
-    // Check the second angle of triangle
+    // Lets check triangle and vertex normals
+    double vertex_tol = 4.0 * (rho_ / reduction_);
+    double triangle_tol = (vertex_tol / 2.0);
+    if (!utils::checkNormal(front.n[0], p3_normal, vertex_tol) || !utils::checkNormal(front.n[1], p3_normal, vertex_tol))
+    {
+      result.vertex_normals_valid = false;
+      result.triangle_normal_valid = false;
+    }
+    else if (!utils::checkNormal(front.n[0], result.normal, triangle_tol) || !utils::checkNormal(front.n[1], result.normal, triangle_tol) || !utils::checkNormal(p3_normal, result.normal, triangle_tol))
+    {
+      result.triangle_normal_valid = false;
+    }
+
     v1 *= -1.0;
     dot = v1.dot(v2);
     cross = v1.cross(v2);
@@ -1266,25 +1435,21 @@ namespace afront_meshing
     result.p[1] = front.p[1];
     result.p[2] = p3;
 
+    result.valid = result.point_valid && result.vertex_normals_valid && result.triangle_normal_valid;
     return result;
   }
 
-  AfrontMeshing::MeshTraits::FaceData AfrontMeshing::createFaceData(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3) const
+  AfrontMeshing::MeshTraits::FaceData AfrontMeshing::createFaceData(const TriangleData &tri) const
   {
     MeshTraits::FaceData center_pt;
-    Eigen::Vector3f cp, v1, v2, norm;
-
-    cp = (p1 + p2 + p3) / 3.0;
-    v1 = p2 - p1;
-    v2  = cp - p1;
-    norm = v2.cross(v1).normalized();
+    Eigen::Vector3f cp = (tri.p[0] + tri.p[1] + tri.p[2]) / 3.0;
 
     center_pt.x = cp(0);
     center_pt.y = cp(1);
     center_pt.z = cp(2);
-    center_pt.normal_x = norm(0);
-    center_pt.normal_y = norm(1);
-    center_pt.normal_z = norm(2);
+    center_pt.normal_x = tri.normal(0);
+    center_pt.normal_y = tri.normal(1);
+    center_pt.normal_z = tri.normal(2);
 
     return center_pt;
   }

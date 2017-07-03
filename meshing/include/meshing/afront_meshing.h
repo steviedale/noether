@@ -44,19 +44,24 @@ namespace afront_meshing
     {
       double l;                  /**< @brief Allowed grow distance perpendicular to half edge */
       double estimated;          /**< @brief The calculated edge length */
+      std::vector<int> sample;   /**< @brief Store a subset of search indicies used for boundary detection */
     };
 
     struct TriangleData
     {
-      double A;             /**< @brief The length for the first half edge (p1->p2) */
-      double B;             /**< @brief The length for the second half edge (p2->p3) */
-      double C;             /**< @brief The length for the remaining side of the triangle (p3->p1) */
-      double a;             /**< @brief The angle BC */
-      double b;             /**< @brief The angle AC */
-      double c;             /**< @brief The anble AB */
-      double aspect_ratio;  /**< @brief The quality of the triangle (1.0 is the best) */
-      Eigen::Vector3f p[3]; /**< @brief Stores the point information for the triangle */
-      bool valid;           /**< @brief Indicates if the triangle is valid. Both edges must point in the same direction as the grow direction. */
+      double A;                   /**< @brief The length for the first half edge (p1->p2) */
+      double B;                   /**< @brief The length for the second half edge (p2->p3) */
+      double C;                   /**< @brief The length for the remaining side of the triangle (p3->p1) */
+      double a;                   /**< @brief The angle BC */
+      double b;                   /**< @brief The angle AC */
+      double c;                   /**< @brief The anble AB */
+      double aspect_ratio;        /**< @brief The quality of the triangle (1.0 is the best) */
+      Eigen::Vector3f normal;     /**< @brief The normal of the triangle */
+      Eigen::Vector3f p[3];       /**< @brief Stores the point information for the triangle */
+      bool point_valid;           /**< @brief Indicates if the triangle is valid. Both edges must point in the same direction as the grow direction. */
+      bool vertex_normals_valid;  /**< @brief The vertex normals are not within some tolerance */
+      bool triangle_normal_valid; /**< @brief The triangle normal is not within some tolerance to the vertex normals*/
+      bool valid;                 /**< @brief If all condition are valid: point_valid, vertex_normals_valid and triangle_normal_valid */
 
       void print(const std::string description = "") const
       {
@@ -116,7 +121,9 @@ namespace afront_meshing
         AtBoundary = 1,                   /**< @brief At the point cloud boundary. */
         InvalidStepSize = 2,              /**< @brief The step size is invalid for the given half edge (2 * step size < front.length). */
         InvalidVertexNormal = 3,          /**< @brief The projected points normal is not consistant with the other triangle normals. */
-        InvalidTriangleNormal = 4         /**< @brief The triangle normal created by the project point is not consistant with the vertex normals. */
+        InvalidTriangleNormal = 4,        /**< @brief The triangle normal created by the project point is not consistant with the vertex normals. */
+        InvalidMLSResults = 5,            /**< @brief The nearest points mls results are invalid. */
+        InvalidProjection = 6             /**< @brief The projected point is not in the grow direction */
       };
 
       AdvancingFrontData afront;          /**< @brief Advancing front data */
@@ -134,6 +141,7 @@ namespace afront_meshing
       VertexIndex closest;                /**< @brief The closest mesh vertex */
       double dist;                        /**< @brief This stores closest distance information. */
       bool found;                         /**< @brief If close proximity was found. */
+      TriangleData tri;                   /**< @brief The triangle data created by the closest point. */
     };
 
     struct FenceViolationResults
@@ -188,7 +196,6 @@ namespace afront_meshing
     {
       rho_ = val;
       hausdorff_error_ = (1.0 - sqrt((1.0 + 2.0 * cos(rho_)) / 3.0)) * (1.0 / (2.0 * sin(rho_ / 2)));
-      std::cout << hausdorff_error_ << std::endl;
     }
 
     /** @brief Get the primary variable used to control mesh triangulation size */
@@ -253,6 +260,12 @@ namespace afront_meshing
     void printFace(const FaceIndex &idx_face) const;
 
   private:
+    /** @brief Used to get the next half edge */
+    CutEarData getNextHalfEdge(const FrontData &front) const;
+
+    /** @brief Used to get the previous half edge */
+    CutEarData getPrevHalfEdge(const FrontData &front) const;
+
     /** @brief Add half edge to queue */
     bool addToQueue(const FaceIndex &face);
     void addToQueueHelper(const HalfEdgeIndex &half_edge);
@@ -285,7 +298,7 @@ namespace afront_meshing
      * @brief Create face data to be stored with the face. Currently it stores the center
      * of the triangle and the normal of the face.
      */
-    MeshTraits::FaceData createFaceData(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3) const;
+    MeshTraits::FaceData createFaceData(const TriangleData &tri) const;
 
     /**
     * @brief Get the dirction to grow for a given half edge
@@ -333,16 +346,19 @@ namespace afront_meshing
     /**
     * @brief Calculate triangle information.
     * @param front The advancing front
-    * @param p3 First point of triangle
+    * @param p Third point of triangle
     * @return Returns information about the triangle: angles, edge lengths, etc.
     */
-    TriangleData getTriangleData(const FrontData &front, const Eigen::Vector3f p3) const;
+    TriangleData getTriangleData(const FrontData &front, const pcl::PointNormal p) const;
 
     /** @brief Check if a point is in the grow direction of the front. */
     bool isPointValid(const FrontData &front, const Eigen::Vector3f p) const;
 
     /** @brief Check if the front is at or near the boundary of the point cloud. */
-    bool nearBoundary(const FrontData &front, const Eigen::Vector3f p) const;
+    bool nearBoundary(const FrontData &front, const int index) const;
+
+    /** @brief This is a direct copy of the pcl isBoundaryPoint function */
+    bool isBoundaryPoint(const int index) const;
 
     #ifdef AFRONTDEBUG
     /**
@@ -363,9 +379,12 @@ namespace afront_meshing
 
     // Algorithm Data
     double hausdorff_error_;
-    double max_edge_length_;
+    double max_edge_length_;          /**< @brief This can be used to calculate the max error fo the reconstruction (max_edge_length_ * hausdorff_error_) */
+    int required_neighbors_;          /**< @brief This the required number of neighbors for a given point found during the MLS. */
+    double boundary_angle_threshold_; /**< @brief The boundary angle threshold */
 
     // Guidance field data
+    int mls_order_;
     MLSSampling mls_;
     pcl::PointCloud<pcl::PointNormal>::Ptr mls_cloud_;
     pcl::search::KdTree<pcl::PointNormal>::Ptr mls_cloud_tree_;

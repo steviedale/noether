@@ -10,6 +10,7 @@ namespace afront_meshing
   public:
     struct SamplePointResults
     {
+      pcl::PointXYZ orig;       /**< @brief The point to be projected on to the MLS surface */
       pcl::PointNormal point;   /**< @brief The point projected on to the MLS surface */
       int              closest; /**< @brief The closest point index on the MLS surface to the project point */
       MLSResult        mls;     /**< @brief The MLS Results for the closest point */
@@ -24,6 +25,8 @@ namespace afront_meshing
 
     double getMaxCurvature() const {return max_curvature_;}
     double getMinCurvature() const {return min_curvature_;}
+
+    MLSResult getMLSResult(const int index) const {return mls_results_[index];}
 
   private:
 
