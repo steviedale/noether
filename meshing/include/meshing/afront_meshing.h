@@ -8,13 +8,14 @@
 #include <meshing/mls_sampling.h>
 #include <meshing/afront_utils.h>
 #define AFRONTDEBUG
+//#undef AFRONTDEBUG
 namespace afront_meshing
 {
   class AfrontMeshing
   {
     struct MeshTraits
     {
-      typedef pcl::PointNormal      VertexData;
+      typedef pcl::PointXYZINormal  VertexData;
       typedef int                   HalfEdgeData;
       typedef int                   EdgeData;
       typedef pcl::PointNormal      FaceData;
@@ -39,13 +40,6 @@ namespace afront_meshing
     typedef Mesh::VertexAroundFaceCirculator             VAFC;
     typedef Mesh::InnerHalfEdgeAroundFaceCirculator      IHEAFC;
     typedef Mesh::OuterHalfEdgeAroundFaceCirculator      OHEAFC;
-
-    struct GrowDistanceResults
-    {
-      double l;                  /**< @brief Allowed grow distance perpendicular to half edge */
-      double estimated;          /**< @brief The calculated edge length */
-      std::vector<int> sample;   /**< @brief Store a subset of search indicies used for boundary detection */
-    };
 
     struct TriangleData
     {
@@ -84,6 +78,7 @@ namespace afront_meshing
     {
       HalfEdgeIndex he;        /**< @brief The half edge index from which to grow the triangle */
       double length;           /**< @brief The half edge length */
+      double max_step;         /**< @brief The maximum grow distance */
       Eigen::Vector3f mp;      /**< @brief The half edge mid point */
       Eigen::Vector3f d;       /**< @brief The half edge grow direction */
       VertexIndex vi[2];       /**< @brief The half edge vertex indicies */
@@ -127,7 +122,6 @@ namespace afront_meshing
       };
 
       AdvancingFrontData afront;          /**< @brief Advancing front data */
-      GrowDistanceResults gdr;            /**< @brief Allowed grow distance */
       TriangleData tri;                   /**< @brief The proposed triangle data */
       MLSSampling::SamplePointResults pv; /**< @brief The predicted point projected on the mls surface */
       Eigen::Vector2d k;                  /**< @brief The principal curvature using the polynomial */
@@ -196,13 +190,18 @@ namespace afront_meshing
     {
       rho_ = val;
       hausdorff_error_ = (1.0 - sqrt((1.0 + 2.0 * cos(rho_)) / 3.0)) * (1.0 / (2.0 * sin(rho_ / 2)));
+      updateTriangleTolerances();
     }
 
     /** @brief Get the primary variable used to control mesh triangulation size */
     double getRho() const {return rho_;}
 
     /** @brief Set how fast can the mesh grow and shrink. (val < 1.0) */
-    void setReduction(double val) {(val >= 1 || val <= 0) ? reduction_ = 0.8 : reduction_ = val;}
+    void setReduction(double val)
+    {
+      (val >= 1 || val <= 0) ? reduction_ = 0.8 : reduction_ = val;
+      updateTriangleTolerances();
+    }
 
     /** @brief Get the variable that controls how fast the mesh can grow and shrink. */
     double getReduction() const {return reduction_;}
@@ -226,11 +225,14 @@ namespace afront_meshing
     /** @brief Get the predicted vertex for the provided front */
     PredictVertexResults predictVertex(const AdvancingFrontData &afront) const;
 
+    /** @brief Check if features of the existing mesh are in close proximity to the proposed new triangle. */
     CloseProximityResults isCloseProximity(const PredictVertexResults &pvr) const;
 
-    FenceViolationResults isFenceViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const std::vector<HalfEdgeIndex> &fences, const VertexIndex &closest, const PredictVertexResults &pvr) const;
+    bool isFenceViolated(const Eigen::Vector3f &sp, const Eigen::Vector3f &ep, const HalfEdgeIndex &fence, const double fence_height, utils::IntersectionLine2PlaneResults &lpr) const;
 
-    bool checkPrevNextHalfEdge(const AdvancingFrontData &afront, TriangleData &tri, VertexIndex &vi) const;
+    FenceViolationResults isFencesViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const std::vector<HalfEdgeIndex> &fences, const VertexIndex &closest, const PredictVertexResults &pvr) const;
+
+    bool checkPrevNextHalfEdge(const AdvancingFrontData &afront, TriangleData &tri, VertexIndex &closest) const;
 
     /** @brief Check if the proposed triangle is to close to the existing mesh. */
     TriangleToCloseResults isTriangleToClose(const PredictVertexResults &pvr) const;
@@ -310,29 +312,11 @@ namespace afront_meshing
     Eigen::Vector3f getGrowDirection(const Eigen::Vector3f &p, const Eigen::Vector3f &mp, const MeshTraits::FaceData &fd) const;
 
     /**
-    * @brief Get the allowed grow distance
-    * @param mp The mid point of the half edge
-    * @param edge_length The half edge length
-    * @return The allowed grow distance
-    */
-    GrowDistanceResults getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length) const;
-
-    /**
      * @brief Get the maximum step required for a given point
      * @param p The point for which to determine the max step
      * @return The max step required
      */
     double getMaxStep(const Eigen::Vector3f &p) const;
-
-    /**
-    * @brief Get the predicted vertex for the new triangle
-    * @param mp The mid point of the half edge from which to grow the triangle
-    * @param d The direction to grow the trianlge
-    * @param l The allowed grow distance
-    * @return The predicted vertex data.
-    */
-    MLSSampling::SamplePointResults getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const;
-
 
     /** @brief Update the Kd Tree of the mesh vertices */
     void updateKdTree();
@@ -349,7 +333,14 @@ namespace afront_meshing
     * @param p Third point of triangle
     * @return Returns information about the triangle: angles, edge lengths, etc.
     */
-    TriangleData getTriangleData(const FrontData &front, const pcl::PointNormal p) const;
+    TriangleData getTriangleData(const FrontData &front, const pcl::PointXYZINormal p) const;
+
+    /** @brief Update the allowed triangle tolerances. */
+    void updateTriangleTolerances()
+    {
+      vertex_normal_tol_ = 1.6 * (rho_ / reduction_); // 1.6 because close proximity allows 0.5
+      triangle_normal_tol_ = vertex_normal_tol_ / 2.0;
+    }
 
     /** @brief Check if a point is in the grow direction of the front. */
     bool isPointValid(const FrontData &front, const Eigen::Vector3f p) const;
@@ -359,6 +350,8 @@ namespace afront_meshing
 
     /** @brief This is a direct copy of the pcl isBoundaryPoint function */
     bool isBoundaryPoint(const int index) const;
+
+    pcl::PolygonMesh getPolynomialSurface(const PredictVertexResults &pvr, const double step) const;
 
     #ifdef AFRONTDEBUG
     /**
@@ -381,6 +374,8 @@ namespace afront_meshing
     double hausdorff_error_;
     double max_edge_length_;          /**< @brief This can be used to calculate the max error fo the reconstruction (max_edge_length_ * hausdorff_error_) */
     int required_neighbors_;          /**< @brief This the required number of neighbors for a given point found during the MLS. */
+    double vertex_normal_tol_;         /**< @brief The angle tolerance for vertex normals for a given triangle */
+    double triangle_normal_tol_;       /**< @brief The angle tolerance for the triangle normal relative to vertex normals */
     double boundary_angle_threshold_; /**< @brief The boundary angle threshold */
 
     // Guidance field data

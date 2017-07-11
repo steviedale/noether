@@ -24,6 +24,158 @@ namespace afront_meshing
     }
   }
 
+//  pcl::PointXYZINormal MLSSampling::projectPoint(double u, double v, double w, const MLSResult &mls_result) const
+//  {
+//    // z = a + b*y + c*y^2 + d*x + e*x*y + f*x^2
+//    double a = mls_result.c_vec[0];
+//    double b = mls_result.c_vec[1];
+//    double c = mls_result.c_vec[2];
+//    double d = mls_result.c_vec[3];
+//    double e = mls_result.c_vec[4];
+//    double f = mls_result.c_vec[5];
+
+//    double gu = u;
+//    double gv = v;
+//    double gw;
+//    double perr;
+//    for (auto i = 0; i < 100; i++)
+//    {
+//      gw = a + b*gv + c*gv*gv + d*gu + e*gu*gv + f*gu*gu;
+//      double err = (u - gu) * (u - gu) + (v - gv) * (v - gv) + (w - gw) * (w - gw);
+//      double du = -2.0 * (u - gu) - 2 * (w - gw) * (d + e * gv + 2 * f *gu);
+//      double dv = -2.0 * (v - gv) - 2 * (w - gw) * (b + e * gu + 2 * c *gv);
+
+//      Eigen::MatrixXd J, Jpinv;
+//      J.resize(1, 2);
+//      J(0, 0) = du;
+//      J(0, 1) = dv;
+
+//      if (!dampedPInv(J, Jpinv))
+//        break;
+
+//      Eigen::MatrixXd update = Jpinv * err;
+//      gu -= update(0);
+//      gv -= update(1);
+
+//      double dist = std::sqrt(err);
+//      if (i != 0)
+//      {
+////        double delta = dist - perr;
+////        double pchg = std::abs(delta / perr);
+////        std::printf("Delta Error: %.10e\t Percent Change: %f\n", delta, pchg);
+//      }
+//      perr = dist;
+//    }
+
+//    double Zx = d + e * gv + 2.0 * f * gu;
+//    double Zy = b + e * gu + 2.0 * c * gv;
+////    Eigen::Vector3d dx(1, 0, Zx);
+////    Eigen::Vector3d dy(0, 1, Zy);
+////    Eigen::Vector3d normal = (dx.cross(dy)).normalized();
+
+//    pcl::PointXYZINormal result;
+//    result.x = static_cast<float> (mls_result.mean[0] + mls_result.u_axis[0] * gu + mls_result.v_axis[0] * gv + mls_result.plane_normal[0] * gw);
+//    result.y = static_cast<float> (mls_result.mean[1] + mls_result.u_axis[1] * gu + mls_result.v_axis[1] * gv + mls_result.plane_normal[1] * gw);
+//    result.z = static_cast<float> (mls_result.mean[2] + mls_result.u_axis[2] * gu + mls_result.v_axis[2] * gv + mls_result.plane_normal[2] * gw);
+
+//    Eigen::Vector3d normal = mls_result.plane_normal - Zx * mls_result.u_axis - Zy * mls_result.v_axis;
+//    normal.normalize();
+
+//    result.normal_x = static_cast<float> (normal[0]);
+//    result.normal_y = static_cast<float> (normal[1]);
+//    result.normal_z = static_cast<float> (normal[2]);
+
+//    Eigen::Vector2f k = calculateCurvature(gu, gv, mls_result);
+//    result.curvature = k.cwiseAbs().maxCoeff();
+//    if (result.curvature < 1e-5)
+//      result.curvature = 1e-5;
+
+//    return result;
+//  }
+
+  pcl::PointXYZINormal MLSSampling::projectPoint(double u, double v, double w, const MLSResult &mls_result) const
+  {
+    // This was implemented based on this https://math.stackexchange.com/questions/1497093/shortest-distance-between-point-and-surface
+    // z = a + b*y + c*y^2 + d*x + e*x*y + f*x^2
+    double a = mls_result.c_vec[0];
+    double b = mls_result.c_vec[1];
+    double c = mls_result.c_vec[2];
+    double d = mls_result.c_vec[3];
+    double e = mls_result.c_vec[4];
+    double f = mls_result.c_vec[5];
+
+    double gu = u;
+    double gv = v;
+    double gw = a + b*gv + c*gv*gv + d*gu + e*gu*gv + f*gu*gu;
+    double tol = 1e-16;
+    double err_total;
+    double dist1 = std::abs(gw - w);
+    double dist2;
+    do
+    {
+      double Zx = d + e * v + 2.0 * f * u;
+      double Zy = b + e * u + 2.0 * c * v;
+      double Zxx = 2.0 * f;
+      double Zxy = e; //Note: Zyx = Zxy
+      double Zyy = 2.0 * c;
+
+      double e1 = (gu - u) + Zx * gw - Zx * w;
+      double e2 = (gv - v) + Zy * gw - Zy * w;
+
+      double F1u = 1 + Zxx * gw + Zx * Zx - Zxx * w;
+      double F1v = Zxy * gw + Zx * Zy - Zxy * w;
+
+      double F2u = Zxy * gw + Zy * Zx - Zxy * w;
+      double F2v = 1 + Zyy * gw + Zy * Zy - Zyy * w;
+
+      Eigen::MatrixXd J(2, 2);
+      J(0, 0) = F1u;
+      J(0, 1) = F1v;
+      J(1, 0) = F2u;
+      J(1, 1) = F2v;
+
+      Eigen::Vector2d err(e1, e2);
+      Eigen::MatrixXd update = J.inverse() * err;
+      gu -= update(0);
+      gv -= update(1);
+      gw = a + b*gv + c*gv*gv + d*gu + e*gu*gv + f*gu*gu;
+      dist2 = std::sqrt((gu - u) * (gu - u) + (gv - v) * (gv - v) + (gw - w) * (gw - w));
+
+      err_total = std::sqrt(e1 * e1 + e2 * e2);
+      std::printf("Distance: %.10e\n", err_total);
+    } while (err_total > tol && dist2 < dist1);
+
+    if (dist2 > dist1) // the optimization was diverging
+    {
+      gu = u;
+      gv = v;
+    }
+
+    std::printf("Start Dist: %.10e\t End Dist: %.10e\n", dist1, dist2);
+
+    double Zx = d + e * gv + 2.0 * f * gu;
+    double Zy = b + e * gu + 2.0 * c * gv;
+
+    pcl::PointXYZINormal result;
+    result.x = static_cast<float> (mls_result.mean[0] + mls_result.u_axis[0] * gu + mls_result.v_axis[0] * gv + mls_result.plane_normal[0] * gw);
+    result.y = static_cast<float> (mls_result.mean[1] + mls_result.u_axis[1] * gu + mls_result.v_axis[1] * gv + mls_result.plane_normal[1] * gw);
+    result.z = static_cast<float> (mls_result.mean[2] + mls_result.u_axis[2] * gu + mls_result.v_axis[2] * gv + mls_result.plane_normal[2] * gw);
+
+    Eigen::Vector3d normal = mls_result.plane_normal - Zx * mls_result.u_axis - Zy * mls_result.v_axis;
+    normal.normalize();
+
+    result.normal_x = static_cast<float> (normal[0]);
+    result.normal_y = static_cast<float> (normal[1]);
+    result.normal_z = static_cast<float> (normal[2]);
+
+    Eigen::Vector2f k = calculateCurvature(gu, gv, mls_result);
+    result.curvature = k.cwiseAbs().maxCoeff();
+    if (result.curvature < 1e-5)
+      result.curvature = 1e-5;
+
+    return result;
+  }
+
   MLSSampling::SamplePointResults MLSSampling::samplePoint(const pcl::PointXYZ& pt) const
   {
     if (!pcl_isfinite(pt.x))
@@ -46,34 +198,43 @@ namespace afront_meshing
       std::printf("\x1B[31m\tMLS Results Not Valid!\n");
 
     Eigen::Vector3d add_point = pt.getVector3fMap().template cast<double>();
-    float u_disp = static_cast<float> ((add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].u_axis)),
-    v_disp = static_cast<float> ((add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].v_axis));
+    double u_disp = (add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].u_axis);
+    double v_disp = (add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].v_axis);
+    double w_disp = (add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].plane_normal);
 
+    pcl::PointNormal result_point;
     pcl::Normal result_normal;
     result.mls = mls_results_[result.closest];
-    projectPointToMLSSurface(u_disp, v_disp,
-                             result.mls.u_axis,
-                             result.mls.v_axis,
-                             result.mls.plane_normal,
-                             result.mls.mean,
-                             result.mls.curvature,
-                             result.mls.c_vec,
-                             result.mls.num_neighbors,
-                             result.point, result_normal);
+//    projectPointToMLSSurface(static_cast<float> (u_disp),
+//                             static_cast<float> (v_disp),
+//                             result.mls.u_axis,
+//                             result.mls.v_axis,
+//                             result.mls.plane_normal,
+//                             result.mls.mean,
+//                             result.mls.curvature,
+//                             result.mls.c_vec,
+//                             result.mls.num_neighbors,
+//                             result_point, result_normal);
 
-    // Copy additional point information if available
-    copyMissingFields(input_->points[result.closest], result.point);
+    result.point = projectPoint(u_disp, v_disp, w_disp, result.mls);
 
-    // Calculate principal curvature
-    Eigen::Vector2f k = calculateCurvature(u_disp, v_disp, result.mls);
 
-    result.point.normal_x = result_normal.normal_x;
-    result.point.normal_y = result_normal.normal_y;
-    result.point.normal_z = result_normal.normal_z;
+//    // Copy additional point information if available
+//    copyMissingFields(input_->points[result.closest], result_point);
 
-    result.point.curvature = k.cwiseAbs().maxCoeff();
-    if (result.point.curvature < 1e-5)
-      result.point.curvature = 1e-5;
+//    // Calculate principal curvature
+//    Eigen::Vector2f k = calculateCurvature(u_disp, v_disp, result.mls);
+
+//    result.point.x = result_point.x;
+//    result.point.y = result_point.y;
+//    result.point.z = result_point.z;
+//    result.point.normal_x = result_normal.normal_x;
+//    result.point.normal_y = result_normal.normal_y;
+//    result.point.normal_z = result_normal.normal_z;
+
+//    result.point.curvature = k.cwiseAbs().maxCoeff();
+//    if (result.point.curvature < 1e-5)
+//      result.point.curvature = 1e-5;
 
 
     return result;

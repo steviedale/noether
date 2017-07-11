@@ -1,10 +1,12 @@
 #include <pcl/geometry/mesh_conversion.h>
+#include <pcl/io/pcd_io.h>
+#include <pcl/surface/organized_fast_mesh.h>
+
 #include <eigen3/Eigen/LU>
 
 #include <meshing/afront_meshing.h>
 #include <chrono>
 
-#include <pcl/io/pcd_io.h>
 
 namespace afront_meshing
 {
@@ -15,6 +17,8 @@ namespace afront_meshing
     fence_counter_ = 0;
     #endif
 
+    setRho(0.5);
+    setReduction(0.8);
     finished_ = false;
     threads_ = 1;
 
@@ -173,8 +177,12 @@ namespace afront_meshing
     viewer_->removeShape("ProxRadius", 1);
     viewer_->removePointCloud("Mesh_Vertex_Cloud", 2);
     viewer_->removePointCloud("Mesh_Vertex_Cloud_Normals", 4);
+    viewer_->removeShape("MLSSurface", 4);
+    viewer_->removeShape("MLSClosest", 4);
     viewer_->removeShape("MLSRadius", 4);
-    viewer_->removeShape("MLSMean", 4);
+    viewer_->removeShape("MLSXAxis", 4);
+    viewer_->removeShape("MLSYAxis", 4);
+    viewer_->removeShape("MLSZAxis", 4);
     viewer_->removeShape("MLSProjection", 4);
 
     pcl::PointXYZ p1, p2, p3, p4;
@@ -194,7 +202,7 @@ namespace afront_meshing
     pcl::visualization::PointCloudColorHandlerCustom<MeshTraits::VertexData> single_color(mesh_vertex_data_copy_, 255, 128, 0);
     viewer_->addPointCloud<MeshTraits::VertexData>(mesh_vertex_data_copy_, single_color, "Mesh_Vertex_Cloud", 2);
 
-    viewer_->addPointCloudNormals<pcl::PointNormal>(mesh_vertex_data_copy_, 1, 0.005, "Mesh_Vertex_Cloud_Normals", 4);
+    viewer_->addPointCloudNormals<pcl::PointXYZINormal>(mesh_vertex_data_copy_, 1, 0.005, "Mesh_Vertex_Cloud_Normals", 4);
     #endif
 
     if (mesh_.getOppositeFaceIndex(afront.next.secondary) != mesh_.getOppositeFaceIndex(afront.prev.secondary) && afront.next.vi[2] == afront.prev.vi[2]) // This indicates a closed area
@@ -217,13 +225,27 @@ namespace afront_meshing
       PredictVertexResults pvr = predictVertex(afront);
 
       #ifdef AFRONTDEBUG
-      Eigen::Vector3f mean_pt = (mls_cloud_->at(pvr.pv.closest)).getVector3fMap();
+      if (pvr.status == PredictVertexResults::Valid)
+      {
+        pcl::PolygonMesh mls_surface = getPolynomialSurface(pvr, r_/50);
+        viewer_->addPolygonMesh(mls_surface, "MLSSurface", 4);
+      }
+
+      Eigen::Vector3f cpt = (mls_cloud_->at(pvr.pv.closest)).getVector3fMap();
+      viewer_->addSphere(utils::convertEigenToPCL(cpt), 0.1 * r_, 255, 0, 0, "MLSClosest", 4);
+      viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSClosest", 4);
+
       Eigen::Vector3f projected_pt = pvr.pv.point.getVector3fMap();
-      viewer_->addSphere(utils::convertEigenToPCL(mean_pt), r_, 0, 255, 128, "MLSRadius", 4);
+      viewer_->addSphere(utils::convertEigenToPCL(cpt), r_, 0, 255, 128, "MLSRadius", 4);
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSRadius", 4);
 
-      viewer_->addSphere(utils::convertEigenToPCL(pvr.pv.mls.mean), 0.02 * r_, 255, 0, 0, "MLSMean", 4);
-      viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSMean", 4);
+      pcl::PointXYZ mls_mean = utils::convertEigenToPCL(pvr.pv.mls.mean);
+      Eigen::Vector3d mls_xaxis = pvr.pv.mls.mean + 0.1 * r_ * pvr.pv.mls.u_axis;
+      Eigen::Vector3d mls_yaxis = pvr.pv.mls.mean + 0.1 * r_ * pvr.pv.mls.v_axis;
+      Eigen::Vector3d mls_zaxis = pvr.pv.mls.mean + 0.1 * r_ * pvr.pv.mls.plane_normal;
+      viewer_->addLine(mls_mean, utils::convertEigenToPCL(mls_xaxis), 255, 0, 0, "MLSXAxis", 4);
+      viewer_->addLine(mls_mean, utils::convertEigenToPCL(mls_yaxis), 0, 255, 0, "MLSYAxis", 4);
+      viewer_->addLine(mls_mean, utils::convertEigenToPCL(mls_zaxis), 0, 0, 255, "MLSZAxis", 4);
 
       viewer_->addSphere(utils::convertEigenToPCL(projected_pt), 0.02 * r_, 255, 128, 0, "MLSProjection", 4);
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSProjection", 4);
@@ -329,6 +351,7 @@ namespace afront_meshing
     mesh_tree_.reset();
     mesh_tree_ = pcl::search::KdTree<MeshTraits::VertexData>::Ptr(new pcl::search::KdTree<MeshTraits::VertexData>);
     mesh_tree_->setInputCloud(mesh_vertex_data_copy_);
+    mesh_tree_->setSortedResults(true);
   }
 
   void AfrontMeshing::createFirstTriangle(const double &x, const double &y, const double &z)
@@ -350,35 +373,40 @@ namespace afront_meshing
     Eigen::Vector3f p1 = sp1.point.getVector3fMap();
 
     // Get the allowed grow distance and control the first triangle size
-    double max_step = getMaxStep(p1);
+    sp1.point.intensity = getMaxStep(p1);
 
     // search for the nearest neighbor
     std::vector<int> K;
     std::vector<float> K_dist;
-    mls_cloud_tree_->nearestKSearch(sp1.point, 2, K, K_dist);
+    mls_cloud_tree_->nearestKSearch(utils::convertPointXYZINormalToPointNormal(sp1.point), 2, K, K_dist);
 
     // use l1 and nearest neighbor to extend edge
     pcl::PointNormal dp;
     MLSSampling::SamplePointResults sp2, sp3;
-    Eigen::Vector3f p2, p3, v1, v2, mp, norm;
+    Eigen::Vector3f p2, p3, v1, v2, mp, norm, proj;
 
     dp = mls_cloud_->points[K[1]];
     v1 = dp.getVector3fMap() - p1;
     v1 = v1.normalized();
     norm = dp.getNormalVector3fMap();
 
-    sp2 = getPredictedVertex(p1, v1, max_step);
+    proj = p1 + sp1.point.intensity * v1;
+    sp2 = mls_.samplePoint(pcl::PointXYZ(proj(0), proj(1), proj(2)));
     p2 = sp2.point.getVector3fMap();
+    sp2.point.intensity = getMaxStep(p2);
 
     mp = utils::getMidPoint(p1, p2);
     double d = utils::distPoint2Point(p1, p2);
-    max_edge_length_ = d;
+    max_edge_length_ = utils::distPoint2Point(p1, p2);
 
     v2 = norm.cross(v1).normalized();
 
-    GrowDistanceResults gdr = getGrowDistance(mp, d);
-    sp3 = getPredictedVertex(mp, v2, gdr.l);
+    double max_step = std::min(sp1.point.intensity, sp2.point.intensity);
+    double l = std::sqrt(pow(max_step, 2.0) - pow(d / 2.0, 2.0)); // Calculate the height of the triangle
+    proj = mp + l * v2;
+    sp3 = mls_.samplePoint(pcl::PointXYZ(proj(0), proj(1), proj(2)));
     p3 = sp3.point.getVector3fMap();
+    sp3.point.intensity = getMaxStep(p3);
 
     d = utils::distPoint2Point(p1, p3);
     if (d > max_edge_length_)
@@ -414,7 +442,7 @@ namespace afront_meshing
 
   void AfrontMeshing::cutEar(const CutEarData &ccer)
   {
-    assert(ccer.tri.point_valid);
+//    assert(ccer.tri.point_valid);
     if (ccer.tri.B > max_edge_length_)
       max_edge_length_ = ccer.tri.B;
 
@@ -446,10 +474,15 @@ namespace afront_meshing
     // Get Half Edge Vertexs
     result.front.vi[0] = mesh_.getOriginatingVertexIndex(half_edge);
     result.front.vi[1] = mesh_.getTerminatingVertexIndex(half_edge);
-    result.front.p[0] = (mesh_vertex_data_[result.front.vi[0].get()]).getVector3fMap();
-    result.front.p[1] = (mesh_vertex_data_[result.front.vi[1].get()]).getVector3fMap();
-    result.front.n[0] = (mesh_vertex_data_[result.front.vi[0].get()]).getNormalVector3fMap();
-    result.front.n[1] = (mesh_vertex_data_[result.front.vi[1].get()]).getNormalVector3fMap();
+
+    pcl::PointXYZINormal p1, p2;
+    p1 = mesh_vertex_data_[result.front.vi[0].get()];
+    p2 = mesh_vertex_data_[result.front.vi[1].get()];
+
+    result.front.p[0] = p1.getVector3fMap();
+    result.front.p[1] = p2.getVector3fMap();
+    result.front.n[0] = p1.getNormalVector3fMap();
+    result.front.n[1] = p2.getNormalVector3fMap();
 
     // Calculate the half edge length
     result.front.length = utils::distPoint2Point(result.front.p[0], result.front.p[1]);
@@ -459,6 +492,9 @@ namespace afront_meshing
 
     // Calculate the grow direction vector
     result.front.d = getGrowDirection(result.front.p[0], result.front.mp, fd);
+
+    // Get the maximum grow distance
+    result.front.max_step = std::min(p1.intensity, p2.intensity);
 
     // Check Next Half Edge
     result.next = getNextHalfEdge(result.front);
@@ -567,14 +603,15 @@ namespace afront_meshing
     result.status = PredictVertexResults::Valid;
     result.afront = afront;
 
-    // Get the allowed grow distance
-    result.gdr = getGrowDistance(front.mp, front.length);
+    // Get new point for growing a triangle to be projected onto the mls surface
+    double l = std::sqrt(pow(front.max_step, 2.0) - pow(front.length / 2.0, 2.0)); // Calculate the height of the triangle
 
     // This is required because 2 * step size < front.length results in nan
-    if (!std::isnan(result.gdr.l))
+    if (!std::isnan(l))
     {
       // Get predicted vertex
-      result.pv = getPredictedVertex(front.mp, front.d, result.gdr.l);
+      Eigen::Vector3f p = front.mp + l * front.d;
+      result.pv = mls_.samplePoint(pcl::PointXYZ(p(0), p(1), p(2)));
       utils::alignNormal(result.pv.point, mesh_vertex_data_[afront.front.vi[0].get()]);
       if (result.pv.mls.num_neighbors < required_neighbors_) // Maybe we should use the 5 * DOF that PCL uses
       {
@@ -584,7 +621,7 @@ namespace afront_meshing
 
       // Check if the projected point is to far from the original point.
       double dist = utils::distPoint2Point(result.pv.orig.getVector3fMap(), result.pv.point.getVector3fMap());
-      if (dist > result.gdr.estimated)
+      if (dist > front.max_step)
       {
         result.status = PredictVertexResults::InvalidProjection;
         return result;
@@ -622,7 +659,7 @@ namespace afront_meshing
     std::vector<int> K;
     std::vector<float> K_dist;
 
-    mesh_tree_->radiusSearch(pvr.pv.point, 3.0 * pvr.gdr.estimated, K, K_dist);
+    mesh_tree_->radiusSearch(pvr.pv.point, 1.0 * pvr.afront.front.max_step, K, K_dist);
 
     results.fences.reserve(K.size());
     results.verticies.reserve(K.size());
@@ -640,7 +677,7 @@ namespace afront_meshing
 
       if (mesh_.isBoundary(vi))
       {
-        pcl::PointNormal chkpn = mesh_vertex_data_[vi.get()];
+        pcl::PointXYZINormal chkpn = mesh_vertex_data_[vi.get()];
         Eigen::Vector3f chkpt = chkpn.getVector3fMap();
         bool chkpt_valid = isPointValid(pvr.afront.front, chkpt);
 
@@ -685,7 +722,7 @@ namespace afront_meshing
 
         double dist = utils::distPoint2Point(pvr.tri.p[2], chkpt);
         results.verticies.push_back(vi);
-        if (dist < 0.5 * pvr.gdr.estimated)
+        if (dist < 0.5 * pvr.afront.front.max_step)
         {
           TriangleData tri = getTriangleData(pvr.afront.front, chkpn);
           if (!results.found)
@@ -775,23 +812,21 @@ namespace afront_meshing
     // If either the prev or next half edge vertice is with in tolerance default to it
     // over closest distant point.
     // TODO: Should we be checking if triangle normals are valid?  
+    double ar_tol = 0.85;
     double prev_dist = utils::distPoint2Line(pvr.afront.prev.tri.p[0], pvr.afront.prev.tri.p[2], pvr.tri.p[2]).d;
     double next_dist = utils::distPoint2Line(pvr.afront.next.tri.p[1], pvr.afront.next.tri.p[2], pvr.tri.p[2]).d;
     if (pvr.afront.prev.tri.point_valid && pvr.afront.next.tri.point_valid)
     {
-      if (prev_dist < next_dist)
+      if (pvr.afront.prev.tri.aspect_ratio >= ar_tol || pvr.afront.next.tri.aspect_ratio >= ar_tol)
       {
-        if (prev_dist < 0.5 * pvr.gdr.estimated)
+        if (pvr.afront.prev.tri.aspect_ratio > pvr.afront.next.tri.aspect_ratio)
         {
           results.found = true;
           results.dist = prev_dist;
           results.closest = pvr.afront.prev.vi[2];
           results.tri = pvr.afront.prev.tri;
         }
-      }
-      else
-      {
-        if (next_dist < 0.5 * pvr.gdr.estimated)
+        else
         {
           results.found = true;
           results.dist = next_dist;
@@ -799,15 +834,38 @@ namespace afront_meshing
           results.tri = pvr.afront.next.tri;
         }
       }
+      else
+      {
+        if (prev_dist < next_dist)
+        {
+          if (prev_dist < 0.5 * pvr.afront.front.max_step)
+          {
+            results.found = true;
+            results.dist = prev_dist;
+            results.closest = pvr.afront.prev.vi[2];
+            results.tri = pvr.afront.prev.tri;
+          }
+        }
+        else
+        {
+          if (next_dist < 0.5 * pvr.afront.front.max_step)
+          {
+            results.found = true;
+            results.dist = next_dist;
+            results.closest = pvr.afront.next.vi[2];
+            results.tri = pvr.afront.next.tri;
+          }
+        }
+      }
     }
-    else if (pvr.afront.prev.tri.point_valid && prev_dist < 0.5 * pvr.gdr.estimated)
+    else if ((pvr.afront.prev.tri.point_valid && prev_dist < 0.5 * pvr.afront.front.max_step) || (pvr.afront.prev.tri.point_valid && pvr.afront.prev.tri.aspect_ratio >= ar_tol))
     {
       results.found = true;
       results.dist = prev_dist;
       results.closest = pvr.afront.prev.vi[2];
       results.tri = pvr.afront.prev.tri;
     }
-    else if (pvr.afront.next.tri.point_valid && next_dist < 0.5 * pvr.gdr.estimated)
+    else if ((pvr.afront.next.tri.point_valid && next_dist < 0.5 * pvr.afront.front.max_step) || (pvr.afront.next.tri.point_valid && pvr.afront.next.tri.aspect_ratio >= ar_tol))
     {
       results.found = true;
       results.dist = next_dist;
@@ -835,7 +893,7 @@ namespace afront_meshing
         Eigen::Vector3f p2 = mesh_vertex_data_[vi[1].get()].getVector3fMap();
 
         utils::DistPoint2LineResults dist = utils::distPoint2Line(p1, p2, pvr.tri.p[2]);
-        if (dist.d < 0.5 * pvr.gdr.estimated)
+        if (dist.d < 0.5 * pvr.afront.front.max_step)
         {
 
           bool check_p1 = isPointValid(pvr.afront.front, p1);
@@ -880,27 +938,27 @@ namespace afront_meshing
     #ifdef AFRONTDEBUG
     Eigen::Vector3f p;
     p = pvr.tri.p[2];
-    viewer_->addSphere(utils::convertEigenToPCL(p), 0.5 * pvr.gdr.estimated, 0, 255, 128, "ProxRadius", 1);
+    viewer_->addSphere(utils::convertEigenToPCL(p), 0.5 * pvr.afront.front.max_step, 0, 255, 128, "ProxRadius", 1);
     viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "ProxRadius", 1);
     #endif
 
     return results;
   }
 
-  bool AfrontMeshing::checkPrevNextHalfEdge(const AdvancingFrontData &afront, TriangleData &tri, VertexIndex &vi) const
+  bool AfrontMeshing::checkPrevNextHalfEdge(const AdvancingFrontData &afront, TriangleData &tri, VertexIndex &closest) const
   {
-    if (mesh_.isValid(vi) && vi == afront.prev.vi[2])
+    if (mesh_.isValid(closest) && closest == afront.prev.vi[2])
       if (afront.next.tri.point_valid && tri.c >= afront.next.tri.c)
       {
-        vi = afront.next.vi[2];
+        closest = afront.next.vi[2];
         tri = afront.next.tri;
         return true;
       }
 
-    if (mesh_.isValid(vi) && vi == afront.next.vi[2])
+    if (mesh_.isValid(closest) && closest == afront.next.vi[2])
       if (afront.prev.tri.point_valid && tri.b >= afront.prev.tri.b)
       {
-        vi = afront.prev.vi[2];
+        closest = afront.prev.vi[2];
         tri = afront.prev.tri;
         return true;
       }
@@ -909,26 +967,41 @@ namespace afront_meshing
     {
       if (afront.next.tri.c < afront.prev.tri.b)
       {
-        vi = afront.next.vi[2];
+        closest = afront.next.vi[2];
         tri = afront.next.tri;
         return true;
       }
       else
       {
-        vi = afront.prev.vi[2];
+        closest = afront.prev.vi[2];
         tri = afront.prev.tri;
         return true;
       }
     }
     else if (afront.next.tri.point_valid && tri.c >= afront.next.tri.c)
     {
-      vi = afront.next.vi[2];
+      closest = afront.next.vi[2];
       tri = afront.next.tri;
       return true;
     }
     else if (afront.prev.tri.point_valid && tri.b >= afront.prev.tri.b)
     {
-      vi = afront.prev.vi[2];
+      closest = afront.prev.vi[2];
+      tri = afront.prev.tri;
+      return true;
+    }
+
+    utils::IntersectionLine2PlaneResults lpr;
+    if (afront.next.tri.point_valid && isFenceViolated(afront.front.p[0], tri.p[2], afront.next.secondary, 2.0 * afront.next.tri.B * hausdorff_error_, lpr))
+    {
+      closest = afront.next.vi[2];
+      tri = afront.next.tri;
+      return true;
+    }
+
+    if (afront.prev.tri.point_valid && isFenceViolated(afront.front.p[1], tri.p[2], afront.prev.secondary, 2.0 * afront.prev.tri.C * hausdorff_error_, lpr))
+    {
+      closest = afront.prev.vi[2];
       tri = afront.prev.tri;
       return true;
     }
@@ -936,7 +1009,36 @@ namespace afront_meshing
     return false;
   }
 
-  AfrontMeshing::FenceViolationResults AfrontMeshing::isFenceViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const std::vector<HalfEdgeIndex> &fences, const VertexIndex &closest, const PredictVertexResults &pvr) const
+  bool AfrontMeshing::isFenceViolated(const Eigen::Vector3f &sp, const Eigen::Vector3f &ep, const HalfEdgeIndex &fence, const double fence_height, utils::IntersectionLine2PlaneResults &lpr) const
+  {
+    // Check for fence intersection
+    Eigen::Vector3f he_p1, he_p2;
+    he_p1 = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(fence).get()]).getVector3fMap();
+    he_p2 = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(fence).get()]).getVector3fMap();
+
+    MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(fence).get()];
+
+    Eigen::Vector3f u = he_p2 - he_p1;
+    Eigen::Vector3f n = fd.getNormalVector3fMap();
+    Eigen::Vector3f v = n * fence_height;
+
+    // Project the line on to the triangle plane. Note this is different from the paper
+    Eigen::Vector3f sp_proj = sp - (sp - he_p1).dot(n) * n;
+    Eigen::Vector3f ep_proj = ep - (ep - he_p1).dot(n) * n;
+    lpr = utils::intersectionLine2Plane(sp_proj, ep_proj, he_p1, u, v);
+
+//    lpr = utils::intersectionLine2Plane(sp, ep, he_p1, u, v);
+
+    if (!lpr.parallel) // May need to add additional check if parallel
+      if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
+        if (lpr.mu <= 1 && lpr.mu >= 0)    // This checks if intersection point is within the x range of the plane
+          if (lpr.mv <= 1 && lpr.mv >= -1) // This checks if intersection point is within the y range of the plane
+            return true;
+
+    return false;
+  }
+
+  AfrontMeshing::FenceViolationResults AfrontMeshing::isFencesViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const std::vector<HalfEdgeIndex> &fences, const VertexIndex &closest, const PredictVertexResults &pvr) const
   {
     // Now need to check for fence violation
     FenceViolationResults results;
@@ -954,31 +1056,9 @@ namespace afront_meshing
         if (closest == mesh_.getOriginatingVertexIndex(fences[i]) || closest == mesh_.getTerminatingVertexIndex(fences[i]))
           continue;
 
-      // Check for fence intersection
-      bool fence_violated = false;
-      Eigen::Vector3f he_p1, he_p2;
-      he_p1 = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(fences[i]).get()]).getVector3fMap();
-      he_p2 = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(fences[i]).get()]).getVector3fMap();
-
-      MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(fences[i]).get()];
-
-      Eigen::Vector3f u = he_p2 - he_p1;
-      Eigen::Vector3f n = fd.getNormalVector3fMap();
-      double fence_height = pvr.gdr.estimated * hausdorff_error_;
-      Eigen::Vector3f v = n * fence_height;
-
-      // Project the line on to the triangle plane. Note this is different from the paper
-      Eigen::Vector3f sp_proj = sp - (sp - he_p1).dot(n) * n;
-      Eigen::Vector3f ep_proj = p - (p - he_p1).dot(n) * n;
-
       utils::IntersectionLine2PlaneResults lpr;
-      lpr = utils::intersectionLine2Plane(sp_proj, ep_proj, he_p1, u, v);
-
-      if (!lpr.parallel) // May need to add additional check if parallel
-        if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
-          if (lpr.mu <= 1 && lpr.mu >= 0)    // This checks if intersection point is within the x range of the plane
-            if (lpr.mv <= 1 && lpr.mv >= -1) // This checks if intersection point is within the y range of the plane
-              fence_violated = true;
+      double fence_height = 2.0 * pvr.afront.front.max_step * hausdorff_error_;
+      bool fence_violated = isFenceViolated(sp, p, fences[i], fence_height, lpr);
 
       if (fence_violated)
       {
@@ -1033,17 +1113,17 @@ namespace afront_meshing
     {
       if (results.found && results.closest == pvr.afront.prev.vi[2])
       {
-        fvr = isFenceViolated(pvr.afront.prev.vi[1], pvr.afront.prev.tri.p[2], cpr.fences, results.closest, pvr);
+        fvr = isFencesViolated(pvr.afront.prev.vi[1], pvr.afront.prev.tri.p[2], cpr.fences, results.closest, pvr);
       }
       else if (results.found && results.closest == pvr.afront.next.vi[2])
       {
-        fvr = isFenceViolated(pvr.afront.prev.vi[0], pvr.afront.next.tri.p[2], cpr.fences, results.closest, pvr);
+        fvr = isFencesViolated(pvr.afront.prev.vi[0], pvr.afront.next.tri.p[2], cpr.fences, results.closest, pvr);
       }
       else
       {
         FenceViolationResults fvr1, fvr2, min_fvr;
-        fvr1 = isFenceViolated(pvr.afront.front.vi[0], results.tri.p[2], cpr.fences, results.closest, pvr);
-        fvr2 = isFenceViolated(pvr.afront.front.vi[1], results.tri.p[2], cpr.fences, results.closest, pvr);
+        fvr1 = isFencesViolated(pvr.afront.front.vi[0], results.tri.p[2], cpr.fences, results.closest, pvr);
+        fvr2 = isFencesViolated(pvr.afront.front.vi[1], results.tri.p[2], cpr.fences, results.closest, pvr);
         if (fvr1.found && fvr2.found)
         {
           fvr = fvr1;
@@ -1109,7 +1189,7 @@ namespace afront_meshing
         if (results.found)
           p = results.tri.p[2];
 
-        viewer_->addSphere(utils::convertEigenToPCL(p), 0.1 * pvr.gdr.l, 255, 255, 0, "Closest", 1);
+        viewer_->addSphere(utils::convertEigenToPCL(p), 0.1 * pvr.afront.front.max_step, 255, 255, 0, "Closest", 1);
         #endif
         return results;
       }
@@ -1224,7 +1304,9 @@ namespace afront_meshing
   {
     // Add new face
     MeshTraits::FaceData new_fd = createFaceData(pvr.tri);
-    FaceIndex fi = mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(pvr.pv.point), new_fd);
+    pcl::PointXYZINormal p = pvr.pv.point;
+    p.intensity = getMaxStep(pvr.tri.p[2]);
+    FaceIndex fi = mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(p), new_fd);
 
     if (pvr.tri.B > max_edge_length_)
       max_edge_length_ = pvr.tri.B;
@@ -1296,15 +1378,6 @@ namespace afront_meshing
     return v2;
   }
 
-  AfrontMeshing::GrowDistanceResults AfrontMeshing::getGrowDistance(const Eigen::Vector3f &mp, const double &edge_length) const
-  {
-    GrowDistanceResults gdr;
-    gdr.estimated = getMaxStep(mp);
-    gdr.l = std::sqrt(pow(gdr.estimated, 2.0) - pow(edge_length / 2.0, 2.0));
-
-    return gdr;
-  }
-
   double AfrontMeshing::getMaxStep(const Eigen::Vector3f &p) const
   {
     pcl::PointNormal pn;
@@ -1359,15 +1432,7 @@ namespace afront_meshing
     return len;
   }
 
-  MLSSampling::SamplePointResults AfrontMeshing::getPredictedVertex(const Eigen::Vector3f &mp, const Eigen::Vector3f &d, const double &l) const
-  {
-    Eigen::Vector3f p = mp + l * d;
-
-    // Project new point onto the mls surface
-    return mls_.samplePoint(pcl::PointXYZ(p(0), p(1), p(2)));
-  }
-
-  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const pcl::PointNormal p) const
+  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const pcl::PointXYZINormal p) const
   {
     TriangleData result;
     Eigen::Vector3f v1, v2, v3, cross;
@@ -1408,14 +1473,12 @@ namespace afront_meshing
     assert(!std::isnan(result.normal[0]));
 
     // Lets check triangle and vertex normals
-    double vertex_tol = 4.0 * (rho_ / reduction_);
-    double triangle_tol = (vertex_tol / 2.0);
-    if (!utils::checkNormal(front.n[0], p3_normal, vertex_tol) || !utils::checkNormal(front.n[1], p3_normal, vertex_tol))
+    if (!utils::checkNormal(front.n[0], p3_normal, vertex_normal_tol_) || !utils::checkNormal(front.n[1], p3_normal, vertex_normal_tol_))
     {
       result.vertex_normals_valid = false;
       result.triangle_normal_valid = false;
     }
-    else if (!utils::checkNormal(front.n[0], result.normal, triangle_tol) || !utils::checkNormal(front.n[1], result.normal, triangle_tol) || !utils::checkNormal(p3_normal, result.normal, triangle_tol))
+    else if (!utils::checkNormal(front.n[0], result.normal, triangle_normal_tol_) || !utils::checkNormal(front.n[1], result.normal, triangle_normal_tol_) || !utils::checkNormal(p3_normal, result.normal, triangle_normal_tol_))
     {
       result.triangle_normal_valid = false;
     }
@@ -1463,7 +1526,7 @@ namespace afront_meshing
   bool AfrontMeshing::addToQueue(const FaceIndex &face)
   {
     // This occures if the face is non-manifold.
-    // It appears that non-manifold vertices are allowed but not face.
+    // It appears that non-manifold vertices are allowed but not faces.
     if (mesh_.isValid(face))
     {
       OHEAFC circ = mesh_.getOuterHalfEdgeAroundFaceCirculator(face);
@@ -1535,6 +1598,46 @@ namespace afront_meshing
               << std::endl;
   }
 
+  pcl::PolygonMesh AfrontMeshing::getPolynomialSurface(const PredictVertexResults &pvr, const double step) const
+  {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr poly (new pcl::PointCloud<pcl::PointXYZ> ());
+
+    // z = a + b*y + c*y^2 + d*x + e*x*y + f*x^2
+    double a = pvr.pv.mls.c_vec[0];
+    double b = pvr.pv.mls.c_vec[1];
+    double c = pvr.pv.mls.c_vec[2];
+    double d = pvr.pv.mls.c_vec[3];
+    double e = pvr.pv.mls.c_vec[4];
+    double f = pvr.pv.mls.c_vec[5];
+
+    int wh = 2 * r_/step + 1;
+    poly->width = wh;
+    poly->height = wh;
+    poly->points.resize(wh * wh);
+    int npoints = 0;
+    for (auto i = 0; i < wh; i++)
+    {
+      double u = i * step - r_;
+      for (auto j = 0; j < wh; j++)
+      {
+        double v = j * step - r_;
+        double w = a + b*v + c*v*v + d*u + e*v*u + f*u*u;
+        poly->points[npoints].x = static_cast<float> (pvr.pv.mls.mean[0] + pvr.pv.mls.u_axis[0] * u + pvr.pv.mls.v_axis[0] * v + pvr.pv.mls.plane_normal[0] * w);
+        poly->points[npoints].y = static_cast<float> (pvr.pv.mls.mean[1] + pvr.pv.mls.u_axis[1] * u + pvr.pv.mls.v_axis[1] * v + pvr.pv.mls.plane_normal[1] * w);
+        poly->points[npoints].z = static_cast<float> (pvr.pv.mls.mean[2] + pvr.pv.mls.u_axis[2] * u + pvr.pv.mls.v_axis[2] * v + pvr.pv.mls.plane_normal[2] * w);
+        npoints++;
+      }
+    }
+
+    pcl::PolygonMesh output;
+    pcl::OrganizedFastMesh<pcl::PointXYZ> ofm;
+    ofm.setInputCloud(poly);
+    ofm.setMaxEdgeLength(2 * step);
+    ofm.setTriangulationType(pcl::OrganizedFastMesh<pcl::PointXYZ>::QUAD_MESH);
+    ofm.reconstruct(output);
+    return output;
+  }
+
   void AfrontMeshing::printFace(const FaceIndex &idx_face) const
   {
     // Circulate around all vertices in the face
@@ -1551,98 +1654,35 @@ namespace afront_meshing
 #ifdef AFRONTDEBUG
   void AfrontMeshing::keyboardEventOccurred(const pcl::visualization::KeyboardEvent &event, void*)
   {
-    if (event.getKeySym() == "i" && event.keyDown())
+    if (event.keyUp())
     {
-      while (!isFinished())
+      std::string k = event.getKeySym();
+      if (isdigit(k[0]))
       {
-        stepMesh();
+        int num = std::stoi(k);
+        int length = std::pow(10, num);
+        if (!isFinished())
+        {
+          for (auto i = 0; i < length; ++i)
+          {
+            try
+            {
+              stepMesh();
+            }
+            catch (const std::exception& e)
+            {
+              std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
+              break;
+            }
 
-        viewer_->spinOnce(1, true);
+            if (isFinished())
+              break;
+          }
+        }
         viewer_->removePolygonMesh();
         viewer_->addPolygonMesh(getMesh());
+        return;
       }
-      return;
-    }
-
-    if (event.getKeySym() == "b" && event.keyDown())
-    {
-      if (!isFinished())
-      {
-        try
-        {
-          stepMesh();
-        }
-        catch (const std::exception& e)
-        {
-          std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
-        }
-        viewer_->removePolygonMesh();
-        viewer_->addPolygonMesh(getMesh());
-      }
-      return;
-    }
-
-    if (event.getKeySym() == "n" && event.keyDown())
-    {
-      if (!isFinished())
-      {
-        for (auto i = 0; i < 100; ++i)
-        {
-          try
-          {
-            stepMesh();
-          }
-          catch (const std::exception& e)
-          {
-            std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
-            break;
-          }
-        }
-      }
-      viewer_->removePolygonMesh();
-      viewer_->addPolygonMesh(getMesh());
-      return;
-    }
-
-    if (event.getKeySym() == "m" && event.keyDown())
-    {
-      if (!isFinished())
-      {
-        for (auto i = 0; i < 1000; ++i)
-        {
-          try
-          {
-            stepMesh();
-          }
-          catch (const std::exception& e)
-          {
-            std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
-            break;
-          }
-        }
-      }
-      viewer_->removePolygonMesh();
-      viewer_->addPolygonMesh(getMesh());
-      return;
-    }
-
-    if (event.getKeySym() == "t" && event.keyDown())
-    {
-      while (!isFinished())
-      {
-        try
-        {
-          stepMesh();
-        }
-        catch (const std::exception& e)
-        {
-          std::printf("\x1B[31m\tFailed to step mesh!\x1B[0m\n");
-          break;
-        }
-      }
-      viewer_->removePolygonMesh();
-      viewer_->addPolygonMesh(getMesh());
-      return;
     }
   }
 #endif

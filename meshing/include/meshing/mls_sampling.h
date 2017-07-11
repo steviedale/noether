@@ -10,11 +10,11 @@ namespace afront_meshing
   public:
     struct SamplePointResults
     {
-      pcl::PointXYZ orig;       /**< @brief The point to be projected on to the MLS surface */
-      pcl::PointNormal point;   /**< @brief The point projected on to the MLS surface */
-      int              closest; /**< @brief The closest point index on the MLS surface to the project point */
-      MLSResult        mls;     /**< @brief The MLS Results for the closest point */
-      double           dist;    /**< @brief The distance squared between point and closest */
+      pcl::PointXYZ orig;           /**< @brief The point to be projected on to the MLS surface */
+      pcl::PointXYZINormal point;   /**< @brief The point projected on to the MLS surface */
+      int              closest;     /**< @brief The closest point index on the MLS surface to the project point */
+      MLSResult        mls;         /**< @brief The MLS Results for the closest point */
+      double           dist;        /**< @brief The distance squared between point and closest */
     };
 
     void process(pcl::PointCloud<pcl::PointNormal> &output);
@@ -22,6 +22,8 @@ namespace afront_meshing
     // expose protected function 'performUpsampling' from MLS
     MLSSampling::SamplePointResults samplePoint(const pcl::PointXYZ& pt) const;
     MLSSampling::SamplePointResults samplePoint(const pcl::PointNormal& pt) const;
+
+    pcl::PointXYZINormal projectPoint(double u, double v, double w, const MLSResult &mls_result) const;
 
     double getMaxCurvature() const {return max_curvature_;}
     double getMinCurvature() const {return min_curvature_;}

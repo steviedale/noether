@@ -22,7 +22,7 @@ namespace utils
   }
 
   /** @brief Align pn's normal with av so they point in the same direction */
-  bool alignNormal(pcl::PointNormal &pn, const pcl::PointNormal &av)
+  bool alignNormal(pcl::PointXYZINormal &pn, const pcl::PointXYZINormal &av)
   {
     Eigen::Vector3f normal =  pn.getNormalVector3fMap();
     if (alignNormal(normal, av.getNormalVector3fMap()));
@@ -43,7 +43,7 @@ namespace utils
     if (dot < 0.0)
       return false;
 
-    double denom = n2.norm() * n2.norm();
+    double denom = n1.norm() * n2.norm();
     double angle = acos(dot/denom);
     if (angle > tol)
       return false;
@@ -61,6 +61,25 @@ namespace utils
   pcl::PointXYZ convertEigenToPCL(const Eigen::Vector3d &p)
   {
     return pcl::PointXYZ(p(0), p(1), p(2));
+  }
+
+  pcl::PointXYZINormal convertPointNormalToPointXYZINormal(const pcl::PointNormal &p)
+  {
+    pcl::PointXYZINormal result;
+    result.x = p.x; result.y = p.y; result.z = p.z; result.data[3] = 1.0f;
+    result.normal_x = p.normal_x; result.normal_y = p.normal_y; result.normal_z = p.normal_z; result.data_n[3] = 0.0f;
+    result.curvature = p.curvature;
+    result.intensity = 0.0;
+    return result;
+  }
+
+  pcl::PointNormal convertPointXYZINormalToPointNormal(const pcl::PointXYZINormal &p)
+  {
+    pcl::PointNormal result;
+    result.x = p.x; result.y = p.y; result.z = p.z; result.data[3] = 1.0f;
+    result.normal_x = p.normal_x; result.normal_y = p.normal_y; result.normal_z = p.normal_z; result.data_n[3] = 0.0f;
+    result.curvature = p.curvature;
+    return result;
   }
 
   /**

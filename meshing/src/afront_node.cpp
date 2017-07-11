@@ -72,6 +72,7 @@ int main(int argc, char **argv)
   std::vector<int> indices;
   pcl::removeNaNFromPointCloud(cloud, filtered_cloud, indices);
 
+  sleep(5);
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(filtered_cloud));
   mesher.setRho(rho);
   mesher.setReduction(reduction);
