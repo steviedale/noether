@@ -1471,9 +1471,11 @@ namespace afront_meshing
       result.vertex_normals_valid = false;
       result.triangle_normal_valid = false;
     }
-    else if (!utils::checkNormal(front.n[0], result.normal, triangle_normal_tol_) || !utils::checkNormal(front.n[1], result.normal, triangle_normal_tol_) || !utils::checkNormal(p3_normal, result.normal, triangle_normal_tol_))
+    else
     {
-      result.triangle_normal_valid = false;
+      Eigen::Vector3f avg_normal = (front.n[0] + front.n[1] + p3_normal) / 3.0;
+      if (!utils::checkNormal(avg_normal, result.normal, triangle_normal_tol_))
+        result.triangle_normal_valid = false;
     }
 
     v1 *= -1.0;

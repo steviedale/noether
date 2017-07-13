@@ -24,125 +24,61 @@ namespace afront_meshing
     }
   }
 
-//  pcl::PointXYZINormal MLSSampling::projectPoint(double u, double v, double w, const MLSResult &mls_result) const
-//  {
-//    // z = a + b*y + c*y^2 + d*x + e*x*y + f*x^2
-//    double a = mls_result.c_vec[0];
-//    double b = mls_result.c_vec[1];
-//    double c = mls_result.c_vec[2];
-//    double d = mls_result.c_vec[3];
-//    double e = mls_result.c_vec[4];
-//    double f = mls_result.c_vec[5];
-
-//    double gu = u;
-//    double gv = v;
-//    double gw;
-//    double perr;
-//    for (auto i = 0; i < 100; i++)
-//    {
-//      gw = a + b*gv + c*gv*gv + d*gu + e*gu*gv + f*gu*gu;
-//      double err = (u - gu) * (u - gu) + (v - gv) * (v - gv) + (w - gw) * (w - gw);
-//      double du = -2.0 * (u - gu) - 2 * (w - gw) * (d + e * gv + 2 * f *gu);
-//      double dv = -2.0 * (v - gv) - 2 * (w - gw) * (b + e * gu + 2 * c *gv);
-
-//      Eigen::MatrixXd J, Jpinv;
-//      J.resize(1, 2);
-//      J(0, 0) = du;
-//      J(0, 1) = dv;
-
-//      if (!dampedPInv(J, Jpinv))
-//        break;
-
-//      Eigen::MatrixXd update = Jpinv * err;
-//      gu -= update(0);
-//      gv -= update(1);
-
-//      double dist = std::sqrt(err);
-//      if (i != 0)
-//      {
-////        double delta = dist - perr;
-////        double pchg = std::abs(delta / perr);
-////        std::printf("Delta Error: %.10e\t Percent Change: %f\n", delta, pchg);
-//      }
-//      perr = dist;
-//    }
-
-//    double Zx = d + e * gv + 2.0 * f * gu;
-//    double Zy = b + e * gu + 2.0 * c * gv;
-////    Eigen::Vector3d dx(1, 0, Zx);
-////    Eigen::Vector3d dy(0, 1, Zy);
-////    Eigen::Vector3d normal = (dx.cross(dy)).normalized();
-
-//    pcl::PointXYZINormal result;
-//    result.x = static_cast<float> (mls_result.mean[0] + mls_result.u_axis[0] * gu + mls_result.v_axis[0] * gv + mls_result.plane_normal[0] * gw);
-//    result.y = static_cast<float> (mls_result.mean[1] + mls_result.u_axis[1] * gu + mls_result.v_axis[1] * gv + mls_result.plane_normal[1] * gw);
-//    result.z = static_cast<float> (mls_result.mean[2] + mls_result.u_axis[2] * gu + mls_result.v_axis[2] * gv + mls_result.plane_normal[2] * gw);
-
-//    Eigen::Vector3d normal = mls_result.plane_normal - Zx * mls_result.u_axis - Zy * mls_result.v_axis;
-//    normal.normalize();
-
-//    result.normal_x = static_cast<float> (normal[0]);
-//    result.normal_y = static_cast<float> (normal[1]);
-//    result.normal_z = static_cast<float> (normal[2]);
-
-//    Eigen::Vector2f k = calculateCurvature(gu, gv, mls_result);
-//    result.curvature = k.cwiseAbs().maxCoeff();
-//    if (result.curvature < 1e-5)
-//      result.curvature = 1e-5;
-
-//    return result;
-//  }
-
-  pcl::PointXYZINormal MLSSampling::projectPoint(double u, double v, double w, const MLSResult &mls_result) const
+  pcl::PointXYZINormal MLSSampling::projectPointOrthogonalToMLSSurface(double u, double v, double w, const MLSResult &mls_result) const
   {
     // This was implemented based on this https://math.stackexchange.com/questions/1497093/shortest-distance-between-point-and-surface
 
     double gu = u;
     double gv = v;
-    PolynomialPartialDerivative d = getPolynomialPartialDerivative(gu, gv, mls_result);
-    double gw = d.z;
-    double tol = 1e-8;
-    double err_total;
-    double dist1 = std::abs(gw - w);
-    double dist2;
-    do
+    double gw = 0;
+    Eigen::Vector3d normal = mls_result.plane_normal;
+    if (polynomial_fit_ && mls_result.num_neighbors >= 5*nr_coeff_ && pcl_isfinite(mls_result.c_vec[0]))
     {
-      double e1 = (gu - u) + d.z_u * gw - d.z_u * w;
-      double e2 = (gv - v) + d.z_v * gw - d.z_v * w;
-
-      double F1u = 1 + d.z_uu * gw + d.z_u * d.z_u - d.z_uu * w;
-      double F1v = d.z_uv * gw + d.z_u * d.z_v - d.z_uv * w;
-
-      double F2u = d.z_uv * gw + d.z_v * d.z_u - d.z_uv * w;
-      double F2v = 1 + d.z_vv * gw + d.z_v * d.z_v - d.z_vv * w;
-
-      Eigen::MatrixXd J(2, 2);
-      J(0, 0) = F1u;
-      J(0, 1) = F1v;
-      J(1, 0) = F2u;
-      J(1, 1) = F2v;
-
-      Eigen::Vector2d err(e1, e2);
-      Eigen::MatrixXd update = J.inverse() * err;
-      gu -= update(0);
-      gv -= update(1);
-
-      d = getPolynomialPartialDerivative(gu, gv, mls_result);
+      PolynomialPartialDerivative d = getPolynomialPartialDerivative(gu, gv, mls_result);
       gw = d.z;
-      dist2 = std::sqrt((gu - u) * (gu - u) + (gv - v) * (gv - v) + (gw - w) * (gw - w));
+      double tol = 1e-8;
+      double err_total;
+      double dist1 = std::abs(gw - w);
+      double dist2;
+      do
+      {
+        double e1 = (gu - u) + d.z_u * gw - d.z_u * w;
+        double e2 = (gv - v) + d.z_v * gw - d.z_v * w;
 
-      err_total = std::sqrt(e1 * e1 + e2 * e2);
-      //std::printf("Distance: %.10e\n", err_total);
-    } while (err_total > tol && dist2 < dist1);
+        double F1u = 1 + d.z_uu * gw + d.z_u * d.z_u - d.z_uu * w;
+        double F1v = d.z_uv * gw + d.z_u * d.z_v - d.z_uv * w;
 
-    if (dist2 > dist1) // the optimization was diverging
-    {
-      gu = u;
-      gv = v;
-      d = getPolynomialPartialDerivative(gu, gv, mls_result);
-      gw = d.z;
+        double F2u = d.z_uv * gw + d.z_v * d.z_u - d.z_uv * w;
+        double F2v = 1 + d.z_vv * gw + d.z_v * d.z_v - d.z_vv * w;
+
+        Eigen::MatrixXd J(2, 2);
+        J(0, 0) = F1u;
+        J(0, 1) = F1v;
+        J(1, 0) = F2u;
+        J(1, 1) = F2v;
+
+        Eigen::Vector2d err(e1, e2);
+        Eigen::MatrixXd update = J.inverse() * err;
+        gu -= update(0);
+        gv -= update(1);
+
+        d = getPolynomialPartialDerivative(gu, gv, mls_result);
+        gw = d.z;
+        dist2 = std::sqrt((gu - u) * (gu - u) + (gv - v) * (gv - v) + (gw - w) * (gw - w));
+
+        err_total = std::sqrt(e1 * e1 + e2 * e2);
+        //std::printf("Distance: %.10e\n", err_total);
+      } while (err_total > tol && dist2 < dist1);
+
+      if (dist2 > dist1) // the optimization was diverging
+      {
+        gu = u;
+        gv = v;
+        d = getPolynomialPartialDerivative(gu, gv, mls_result);
+        gw = d.z;
+      }
+      normal -= (d.z_u * mls_result.u_axis + d.z_v * mls_result.v_axis);
     }
-
     //std::printf("Start Dist: %.10e\t End Dist: %.10e\n", dist1, dist2);
 
     pcl::PointXYZINormal result;
@@ -150,9 +86,7 @@ namespace afront_meshing
     result.y = static_cast<float> (mls_result.mean[1] + mls_result.u_axis[1] * gu + mls_result.v_axis[1] * gv + mls_result.plane_normal[1] * gw);
     result.z = static_cast<float> (mls_result.mean[2] + mls_result.u_axis[2] * gu + mls_result.v_axis[2] * gv + mls_result.plane_normal[2] * gw);
 
-    Eigen::Vector3d normal = mls_result.plane_normal - d.z_u * mls_result.u_axis - d.z_v * mls_result.v_axis;
     normal.normalize();
-
     result.normal_x = static_cast<float> (normal[0]);
     result.normal_y = static_cast<float> (normal[1]);
     result.normal_z = static_cast<float> (normal[2]);
@@ -192,7 +126,7 @@ namespace afront_meshing
     double w_disp = (add_point - mls_results_[result.closest].mean).dot(mls_results_[result.closest].plane_normal);
 
     result.mls = mls_results_[result.closest];
-    result.point = projectPoint(u_disp, v_disp, w_disp, result.mls);
+    result.point = projectPointOrthogonalToMLSSurface(u_disp, v_disp, w_disp, result.mls);
     return result;
   }
 
