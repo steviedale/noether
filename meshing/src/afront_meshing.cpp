@@ -1199,13 +1199,6 @@ namespace afront_meshing
     return results;
   }
 
-  utils::DistLine2LineResults AfrontMeshing::distLineToHalfEdge(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge) const
-  {
-    return utils::distLine2Line(p1, p2,
-                                 (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(half_edge).get()]).getVector3fMap(),
-                                 (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(half_edge).get()]).getVector3fMap());
-  }
-
   bool AfrontMeshing::isPointValid(const FrontData &front, const Eigen::Vector3f p) const
   {
     Eigen::Vector3f v = p - front.mp;
@@ -1598,17 +1591,22 @@ namespace afront_meshing
               << std::endl;
   }
 
+  void AfrontMeshing::printFace(const FaceIndex &idx_face) const
+  {
+    // Circulate around all vertices in the face
+    VAFC       circ     = mesh_.getVertexAroundFaceCirculator(idx_face);
+    const VAFC circ_end = circ;
+    std::cout << "  ";
+    do
+    {
+      std::cout << mesh_vertex_data_ [circ.getTargetIndex().get()] << " ";
+    } while (++circ != circ_end);
+    std::cout << std::endl;
+  }
+
   pcl::PolygonMesh AfrontMeshing::getPolynomialSurface(const PredictVertexResults &pvr, const double step) const
   {
     pcl::PointCloud<pcl::PointXYZ>::Ptr poly (new pcl::PointCloud<pcl::PointXYZ> ());
-
-    // z = a + b*y + c*y^2 + d*x + e*x*y + f*x^2
-    double a = pvr.pv.mls.c_vec[0];
-    double b = pvr.pv.mls.c_vec[1];
-    double c = pvr.pv.mls.c_vec[2];
-    double d = pvr.pv.mls.c_vec[3];
-    double e = pvr.pv.mls.c_vec[4];
-    double f = pvr.pv.mls.c_vec[5];
 
     int wh = 2 * r_/step + 1;
     poly->width = wh;
@@ -1621,7 +1619,7 @@ namespace afront_meshing
       for (auto j = 0; j < wh; j++)
       {
         double v = j * step - r_;
-        double w = a + b*v + c*v*v + d*u + e*v*u + f*u*u;
+        double w = mls_.getPolynomialValue(u, v, pvr.pv.mls);
         poly->points[npoints].x = static_cast<float> (pvr.pv.mls.mean[0] + pvr.pv.mls.u_axis[0] * u + pvr.pv.mls.v_axis[0] * v + pvr.pv.mls.plane_normal[0] * w);
         poly->points[npoints].y = static_cast<float> (pvr.pv.mls.mean[1] + pvr.pv.mls.u_axis[1] * u + pvr.pv.mls.v_axis[1] * v + pvr.pv.mls.plane_normal[1] * w);
         poly->points[npoints].z = static_cast<float> (pvr.pv.mls.mean[2] + pvr.pv.mls.u_axis[2] * u + pvr.pv.mls.v_axis[2] * v + pvr.pv.mls.plane_normal[2] * w);
@@ -1636,19 +1634,6 @@ namespace afront_meshing
     ofm.setTriangulationType(pcl::OrganizedFastMesh<pcl::PointXYZ>::QUAD_MESH);
     ofm.reconstruct(output);
     return output;
-  }
-
-  void AfrontMeshing::printFace(const FaceIndex &idx_face) const
-  {
-    // Circulate around all vertices in the face
-    VAFC       circ     = mesh_.getVertexAroundFaceCirculator(idx_face);
-    const VAFC circ_end = circ;
-    std::cout << "  ";
-    do
-    {
-      std::cout << mesh_vertex_data_ [circ.getTargetIndex().get()] << " ";
-    } while (++circ != circ_end);
-    std::cout << std::endl;
   }
 
 #ifdef AFRONTDEBUG

@@ -324,9 +324,6 @@ namespace afront_meshing
     /** @brief Get the curvature provided an index. */
     float getCurvature(const int &index) const;
 
-    /** @brief Calculate the distance between a point and a half edge. */
-    utils::DistLine2LineResults distLineToHalfEdge(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const HalfEdgeIndex &half_edge) const;
-
     /**
     * @brief Calculate triangle information.
     * @param front The advancing front

@@ -17,6 +17,16 @@ namespace afront_meshing
       double           dist;        /**< @brief The distance squared between point and closest */
     };
 
+    struct PolynomialPartialDerivative
+    {
+      double z;     /**< @brief The z component of the polynomial evaluated at z(u, v). */
+      double z_u;   /**< @brief The partial derivative dz/du. */
+      double z_v;   /**< @brief The partial derivative dz/dv. */
+      double z_uu;  /**< @brief The partial derivative d^2z/du^2. */
+      double z_vv;  /**< @brief The partial derivative d^2z/dv^2. */
+      double z_uv;  /**< @brief The partial derivative d^2z/dudv. */
+    };
+
     void process(pcl::PointCloud<pcl::PointNormal> &output);
 
     // expose protected function 'performUpsampling' from MLS
@@ -30,9 +40,11 @@ namespace afront_meshing
 
     MLSResult getMLSResult(const int index) const {return mls_results_[index];}
 
+    double getPolynomialValue(double u, double v, const MLSResult &mls_result) const;
+    PolynomialPartialDerivative getPolynomialPartialDerivative(const double u, const double v, const MLSResult &mls_result) const;
   private:
 
-    Eigen::Vector2f calculateCurvature(const float &u, const float &v, const MLSResult &mls_result) const;
+    Eigen::Vector2f calculateCurvature(const double u, const double v, const MLSResult &mls_result) const;
     Eigen::Vector2f calculateCurvature(const Eigen::Vector3f pt, const int &index) const;
 
     pcl::PointCloud<pcl::PointXYZ> cloud_;
