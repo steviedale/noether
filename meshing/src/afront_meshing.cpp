@@ -6,20 +6,20 @@
 
 #include <meshing/afront_meshing.h>
 #include <chrono>
+#include <boost/make_shared.hpp>
 
 
 namespace afront_meshing
 {
-  AfrontMeshing::AfrontMeshing() : mesh_vertex_data_(mesh_.getVertexDataCloud()), finished_(false), initialized_(false), search_radius_(0.0)
+  AfrontMeshing::AfrontMeshing() : finished_(false), initialized_(false), search_radius_(0.0)
   {
     #ifdef AFRONTDEBUG
     counter_ = 0;
     fence_counter_ = 0;
     #endif
 
-//    mesh_octree_ = pcl::octree::OctreePointCloud<MeshTraits::VertexData>::Ptr(new pcl::octree::OctreePointCloud<MeshTraits::VertexData>(0.01));
-//    mesh_vertex_data_octree_ = pcl::PointCloud<MeshTraits::VertexData>::Ptr(new pcl::PointCloud<MeshTraits::VertexData>(mesh_.getVertexDataCloud()));
-//    mesh_octree_->setInputCloud(mesh_vertex_data_octree_);
+    pcl::PointCloud<MeshTraits::VertexData> &mesh_data = mesh_.getVertexDataCloud();
+    mesh_vertex_data_ptr_ = pcl::PointCloud<MeshTraits::VertexData>::Ptr(&mesh_data, [] (pcl::PointCloud<MeshTraits::VertexData>*){});
 
     setRho(AFRONT_DEFAULT_RHO);
     setReduction(AFRONT_DEFAULT_REDUCTION);
@@ -53,6 +53,10 @@ namespace afront_meshing
       PCL_ERROR("Failed to compute Guidance Field! Try increasing radius.\n");
       return false;
     }
+
+    mesh_octree_ = pcl::octree::OctreePointCloudSearch<MeshTraits::VertexData>::Ptr(new pcl::octree::OctreePointCloudSearch<MeshTraits::VertexData>(search_radius_));
+    mesh_vertex_data_indices_ = pcl::IndicesPtr(new std::vector<int>);
+    mesh_octree_->setInputCloud(mesh_vertex_data_ptr_, mesh_vertex_data_indices_);
 
     // Create first triangle
     createFirstTriangle(rand() % mls_cloud_->size());
@@ -137,7 +141,7 @@ namespace afront_meshing
   pcl::PointCloud<pcl::Normal>::ConstPtr AfrontMeshing::getMeshVertexNormals() const
   {
     pcl::PointCloud<pcl::Normal>::Ptr pn(new pcl::PointCloud<pcl::Normal>());;
-    pcl::copyPointCloud(mesh_vertex_data_, *pn);
+    pcl::copyPointCloud(*mesh_vertex_data_ptr_, *pn);
 
     return pn;
   }
@@ -175,8 +179,6 @@ namespace afront_meshing
 
     HalfEdgeIndex half_edge = queue_.front();
     queue_.pop_front();
-
-    updateKdTree();
 
     AdvancingFrontData afront = getAdvancingFrontData(half_edge);
 
@@ -221,10 +223,10 @@ namespace afront_meshing
     viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "PrevHalfEdge", 1);
 
 
-    pcl::visualization::PointCloudColorHandlerCustom<MeshTraits::VertexData> single_color(mesh_vertex_data_copy_, 255, 128, 0);
-    viewer_->addPointCloud<MeshTraits::VertexData>(mesh_vertex_data_copy_, single_color, "Mesh_Vertex_Cloud", 2);
+    pcl::visualization::PointCloudColorHandlerCustom<MeshTraits::VertexData> single_color(mesh_vertex_data_ptr_, 255, 128, 0);
+    viewer_->addPointCloud<MeshTraits::VertexData>(mesh_vertex_data_ptr_, single_color, "Mesh_Vertex_Cloud", 2);
 
-    viewer_->addPointCloudNormals<pcl::PointXYZINormal>(mesh_vertex_data_copy_, 1, 0.005, "Mesh_Vertex_Cloud_Normals", 4);
+    viewer_->addPointCloudNormals<pcl::PointXYZINormal>(mesh_vertex_data_ptr_, 1, 0.005, "Mesh_Vertex_Cloud_Normals", 4);
     #endif
 
     if (mesh_.getOppositeFaceIndex(afront.next.secondary) != mesh_.getOppositeFaceIndex(afront.prev.secondary) && afront.next.vi[2] == afront.prev.vi[2]) // This indicates a closed area
@@ -364,17 +366,6 @@ namespace afront_meshing
       finished_ = true;
   }
 
-  void AfrontMeshing::updateKdTree()
-  {
-    mesh_vertex_data_copy_.reset();
-    mesh_vertex_data_copy_ = pcl::PointCloud<MeshTraits::VertexData>::Ptr(new pcl::PointCloud<MeshTraits::VertexData>(mesh_.getVertexDataCloud()));
-
-    mesh_tree_.reset();
-    mesh_tree_ = pcl::search::KdTree<MeshTraits::VertexData>::Ptr(new pcl::search::KdTree<MeshTraits::VertexData>);
-    mesh_tree_->setInputCloud(mesh_vertex_data_copy_);
-    mesh_tree_->setSortedResults(true);
-  }
-
   void AfrontMeshing::createFirstTriangle(const double &x, const double &y, const double &z)
   {
     std::vector<int> K;
@@ -457,7 +448,13 @@ namespace afront_meshing
     vi.push_back(mesh_.addVertex(sp1.point));
     vi.push_back(mesh_.addVertex(sp2.point));
     vi.push_back(mesh_.addVertex(sp3.point));
+
     FaceIndex fi = mesh_.addFace(vi[0], vi[1], vi[2], fd);
+
+    mesh_octree_->addPointFromCloud(0, mesh_vertex_data_indices_);
+    mesh_octree_->addPointFromCloud(1, mesh_vertex_data_indices_);
+    mesh_octree_->addPointFromCloud(2, mesh_vertex_data_indices_);
+
     addToQueue(fi);
   }
 
@@ -497,8 +494,8 @@ namespace afront_meshing
     result.front.vi[1] = mesh_.getTerminatingVertexIndex(half_edge);
 
     pcl::PointXYZINormal p1, p2;
-    p1 = mesh_vertex_data_[result.front.vi[0].get()];
-    p2 = mesh_vertex_data_[result.front.vi[1].get()];
+    p1 = mesh_vertex_data_ptr_->at(result.front.vi[0].get());
+    p2 = mesh_vertex_data_ptr_->at(result.front.vi[1].get());
 
     result.front.p[0] = p1.getVector3fMap();
     result.front.p[1] = p2.getVector3fMap();
@@ -534,7 +531,7 @@ namespace afront_meshing
     next.vi[0] = front.vi[0];
     next.vi[1] = front.vi[1];
     next.vi[2] = mesh_.getTerminatingVertexIndex(next.secondary);
-    next.tri = getTriangleData(front, mesh_vertex_data_[next.vi[2].get()]);
+    next.tri = getTriangleData(front, mesh_vertex_data_ptr_->at(next.vi[2].get()));
 
     OHEAVC circ_next = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(front.vi[1]);
     const OHEAVC circ_next_end = circ_next;
@@ -555,7 +552,7 @@ namespace afront_meshing
       if (he == front.he)
         continue;
 
-      TriangleData tri = getTriangleData(front, mesh_vertex_data_[evi.get()]);
+      TriangleData tri = getTriangleData(front, mesh_vertex_data_ptr_->at(evi.get()));
       if ((tri.point_valid && !next.tri.point_valid) || (tri.point_valid && next.tri.point_valid && tri.c < next.tri.c))
       {
         next.secondary = he;
@@ -577,7 +574,7 @@ namespace afront_meshing
     prev.vi[0] = front.vi[0];
     prev.vi[1] = front.vi[1];
     prev.vi[2] = mesh_.getOriginatingVertexIndex(prev.secondary);
-    prev.tri = getTriangleData(front, mesh_vertex_data_[prev.vi[2].get()]);
+    prev.tri = getTriangleData(front, mesh_vertex_data_ptr_->at(prev.vi[2].get()));
 
     OHEAVC circ_prev = mesh_.getOutgoingHalfEdgeAroundVertexCirculator(front.vi[0]);
     const OHEAVC circ_prev_end = circ_prev;
@@ -598,7 +595,7 @@ namespace afront_meshing
       if (he == front.he)
         continue;
 
-      TriangleData tri = getTriangleData(front, mesh_vertex_data_[evi.get()]);
+      TriangleData tri = getTriangleData(front, mesh_vertex_data_ptr_->at(evi.get()));
 
       if ((tri.point_valid && !prev.tri.point_valid) || (tri.point_valid && prev.tri.point_valid && tri.b < prev.tri.b))
       {
@@ -631,7 +628,7 @@ namespace afront_meshing
       // Get predicted vertex
       Eigen::Vector3f p = front.mp + l * front.d;
       result.pv = mls_.samplePoint(pcl::PointXYZ(p(0), p(1), p(2)));
-      utils::alignNormal(result.pv.point, mesh_vertex_data_[afront.front.vi[0].get()]);
+      utils::alignNormal(result.pv.point, mesh_vertex_data_ptr_->at(afront.front.vi[0].get()));
       if (result.pv.mls.num_neighbors < required_neighbors_) // Maybe we should use the 5 * DOF that PCL uses
       {
         result.status = PredictVertexResults::InvalidMLSResults;
@@ -678,7 +675,7 @@ namespace afront_meshing
     std::vector<int> K;
     std::vector<float> K_dist;
 
-    mesh_tree_->radiusSearch(pvr.pv.point, pvr.afront.front.max_step, K, K_dist);
+    mesh_octree_->radiusSearch(pvr.pv.point, pvr.afront.front.max_step, K, K_dist);
 
     results.fences.reserve(K.size());
     results.verticies.reserve(K.size());
@@ -687,7 +684,7 @@ namespace afront_meshing
     // First check for closest proximity violation
     for(auto i = 0; i < K.size(); ++i)
     {
-      MeshTraits::VertexData &data = mesh_vertex_data_.at(K[i]);
+      MeshTraits::VertexData &data = mesh_vertex_data_ptr_->at(K[i]);
       VertexIndex vi = mesh_.getVertexIndex(data);
 
       // Don't include the front vertices
@@ -696,7 +693,7 @@ namespace afront_meshing
 
       if (mesh_.isBoundary(vi))
       {
-        pcl::PointXYZINormal chkpn = mesh_vertex_data_[vi.get()];
+        pcl::PointXYZINormal chkpn = mesh_vertex_data_ptr_->at(vi.get());
         Eigen::Vector3f chkpt = chkpn.getVector3fMap();
         bool chkpt_valid = isPointValid(pvr.afront.front, chkpt);
 
@@ -717,7 +714,7 @@ namespace afront_meshing
           if (evi == pvr.afront.front.vi[0] || evi == pvr.afront.front.vi[1])
             continue;
 
-          Eigen::Vector3f endpt = mesh_vertex_data_[evi.get()].getVector3fMap();
+          Eigen::Vector3f endpt = mesh_vertex_data_ptr_->at(evi.get()).getVector3fMap();
           bool endpt_valid = isPointValid(pvr.afront.front, endpt);
           if (chkpt_valid || endpt_valid) // If either vertex is valid add as a valid fence check.
           {
@@ -907,8 +904,8 @@ namespace afront_meshing
         if (vi[0] == pvr.afront.front.vi[0] || vi[1] == pvr.afront.front.vi[0] || vi[0] == pvr.afront.front.vi[1] || vi[1] == pvr.afront.front.vi[1])
           continue;
 
-        Eigen::Vector3f p1 = mesh_vertex_data_[vi[0].get()].getVector3fMap();
-        Eigen::Vector3f p2 = mesh_vertex_data_[vi[1].get()].getVector3fMap();
+        Eigen::Vector3f p1 = mesh_vertex_data_ptr_->at(vi[0].get()).getVector3fMap();
+        Eigen::Vector3f p2 = mesh_vertex_data_ptr_->at(vi[1].get()).getVector3fMap();
 
         utils::DistPoint2LineResults dist = utils::distPoint2Line(p1, p2, pvr.tri.p[2]);
         if (dist.d < AFRONT_CLOSE_PROXIMITY_FACTOR * pvr.afront.front.max_step)
@@ -940,14 +937,14 @@ namespace afront_meshing
             results.found = true;
             results.dist = dist.d;
             results.closest = vi[index];
-            results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_[results.closest.get()]);
+            results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_ptr_->at(results.closest.get()));
           }
           else
           {
             results.found = true;
             results.dist = dist.d;
             results.closest = vi[index];
-            results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_[results.closest.get()]);
+            results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_ptr_->at(results.closest.get()));
           }
         }
       }
@@ -1031,8 +1028,8 @@ namespace afront_meshing
   {
     // Check for fence intersection
     Eigen::Vector3f he_p1, he_p2;
-    he_p1 = (mesh_vertex_data_[mesh_.getOriginatingVertexIndex(fence).get()]).getVector3fMap();
-    he_p2 = (mesh_vertex_data_[mesh_.getTerminatingVertexIndex(fence).get()]).getVector3fMap();
+    he_p1 = (mesh_vertex_data_ptr_->at(mesh_.getOriginatingVertexIndex(fence).get())).getVector3fMap();
+    he_p2 = (mesh_vertex_data_ptr_->at(mesh_.getTerminatingVertexIndex(fence).get())).getVector3fMap();
 
     MeshTraits::FaceData fd = mesh_.getFaceDataCloud()[mesh_.getOppositeFaceIndex(fence).get()];
 
@@ -1059,7 +1056,7 @@ namespace afront_meshing
     // Now need to check for fence violation
     FenceViolationResults results;
     results.found = false;
-    Eigen::Vector3f sp = mesh_vertex_data_[vi.get()].getVector3fMap();
+    Eigen::Vector3f sp = mesh_vertex_data_ptr_->at(vi.get()).getVector3fMap();
 
     for(auto i = 0; i < fences.size(); ++i)
     {
@@ -1170,8 +1167,8 @@ namespace afront_meshing
         Eigen::Vector3f fp[2];
         fvi[0] = mesh_.getOriginatingVertexIndex(fvr.he);
         fvi[1] = mesh_.getTerminatingVertexIndex(fvr.he);
-        fp[0] = (mesh_vertex_data_[fvi[0].get()]).getVector3fMap();
-        fp[1] = (mesh_vertex_data_[fvi[1].get()]).getVector3fMap();
+        fp[0] = (mesh_vertex_data_ptr_->at(fvi[0].get())).getVector3fMap();
+        fp[1] = (mesh_vertex_data_ptr_->at(fvi[1].get())).getVector3fMap();
 
         bool vp1 = isPointValid(pvr.afront.front, fp[0]);
         bool vp2 = isPointValid(pvr.afront.front, fp[1]);
@@ -1194,7 +1191,7 @@ namespace afront_meshing
           index = 1;
 
         results.closest = fvi[index];
-        results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_[results.closest.get()]);
+        results.tri = getTriangleData(pvr.afront.front, mesh_vertex_data_ptr_->at(results.closest.get()));
 
         checkPrevNextHalfEdge(pvr.afront, results.tri, results.closest);
       }
@@ -1316,7 +1313,7 @@ namespace afront_meshing
     pcl::PointXYZINormal p = pvr.pv.point;
     p.intensity = getMaxStep(pvr.tri.p[2]);
     FaceIndex fi = mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(p), new_fd);
-//    mesh_octree_->addPointFromCloud();
+    mesh_octree_->addPointFromCloud(mesh_vertex_data_ptr_->size() - 1, mesh_vertex_data_indices_);
 
     if (pvr.tri.B > max_edge_length_)
       max_edge_length_ = pvr.tri.B;
@@ -1591,7 +1588,7 @@ namespace afront_meshing
     std::cout << "Vertices:\n   ";
     for (unsigned int i=0; i<mesh_.sizeVertices(); ++i)
     {
-      std::cout << mesh_vertex_data_[i] << " ";
+      std::cout << mesh_vertex_data_ptr_->at(i) << " ";
     }
     std::cout << std::endl;
   }
@@ -1606,9 +1603,9 @@ namespace afront_meshing
   void AfrontMeshing::printEdge(const HalfEdgeIndex &half_edge) const
   {
     std::cout << "  "
-              << mesh_vertex_data_ [mesh_.getOriginatingVertexIndex(half_edge).get()]
+              << mesh_vertex_data_ptr_->at(mesh_.getOriginatingVertexIndex(half_edge).get())
               << " "
-              << mesh_vertex_data_ [mesh_.getTerminatingVertexIndex(half_edge).get()]
+              << mesh_vertex_data_ptr_->at(mesh_.getTerminatingVertexIndex(half_edge).get())
               << std::endl;
   }
 
@@ -1620,7 +1617,7 @@ namespace afront_meshing
     std::cout << "  ";
     do
     {
-      std::cout << mesh_vertex_data_ [circ.getTargetIndex().get()] << " ";
+      std::cout << mesh_vertex_data_ptr_->at(circ.getTargetIndex().get()) << " ";
     } while (++circ != circ_end);
     std::cout << std::endl;
   }

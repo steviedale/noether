@@ -9,6 +9,7 @@
 #include <meshing/afront_utils.h>
 //#define AFRONTDEBUG
 #undef AFRONTDEBUG
+
 namespace afront_meshing
 {
   const double AFRONT_DEFAULT_REDUCTION = 0.8;
@@ -419,9 +420,6 @@ namespace afront_meshing
      */
     double getMaxStep(const Eigen::Vector3f &p) const;
 
-    /** @brief Update the Kd Tree of the mesh vertices */
-    void updateKdTree();
-
     /** @brief Get the curvature provided an index. */
     float getCurvature(const int &index) const;
 
@@ -486,11 +484,10 @@ namespace afront_meshing
 
     // Generated data
     Mesh mesh_; /**< The mesh object for inserting faces/vertices */
-    pcl::PointCloud<MeshTraits::VertexData> &mesh_vertex_data_;
-    pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_copy_;
-    pcl::search::KdTree<MeshTraits::VertexData>::Ptr mesh_tree_;
-//    pcl::octree::OctreePointCloud<MeshTraits::VertexData>::Ptr mesh_octree_;
-//    pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_octree_;
+    pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_ptr_;
+    pcl::octree::OctreePointCloudSearch<MeshTraits::VertexData>::Ptr mesh_octree_;
+    pcl::IndicesPtr mesh_vertex_data_indices_;
+
 
     // Algorithm Status Data
     std::deque<HalfEdgeIndex> queue_;
