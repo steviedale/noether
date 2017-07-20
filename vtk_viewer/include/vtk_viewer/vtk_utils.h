@@ -157,6 +157,13 @@ namespace vtk_viewer
                                const pcl::PointXYZ& view_point = pcl::PointXYZ(0, 0, 5.0));
 
   /**
+   * @brief pclPointCloud2HasNormals Check if the it contains normal data.
+   * @param msg The input PCLPointCloud2
+   * @return True if it contains field normal_x, normal_y, normal_z, otherwise false
+   */
+  bool pclPointCloud2HasNormals(const pcl::PCLPointCloud2 &msg);
+
+  /**
    * @brief loadPolygonMeshFromPLY Load a pcl::PolygonMesh from a file
    * @param file The file to read from
    * @param mesh The mesh to return

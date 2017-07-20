@@ -10,41 +10,54 @@
 
 namespace afront_meshing
 {
-  AfrontMeshing::AfrontMeshing() : mesh_vertex_data_(mesh_.getVertexDataCloud())
+  AfrontMeshing::AfrontMeshing() : mesh_vertex_data_(mesh_.getVertexDataCloud()), finished_(false), initialized_(false), search_radius_(0.0)
   {
     #ifdef AFRONTDEBUG
     counter_ = 0;
     fence_counter_ = 0;
     #endif
 
-    setRho(0.5);
-    setReduction(0.8);
-    finished_ = false;
-    threads_ = 1;
+//    mesh_octree_ = pcl::octree::OctreePointCloud<MeshTraits::VertexData>::Ptr(new pcl::octree::OctreePointCloud<MeshTraits::VertexData>(0.01));
+//    mesh_vertex_data_octree_ = pcl::PointCloud<MeshTraits::VertexData>::Ptr(new pcl::PointCloud<MeshTraits::VertexData>(mesh_.getVertexDataCloud()));
+//    mesh_octree_->setInputCloud(mesh_vertex_data_octree_);
 
-    mls_order_ = 2;
-    int nr_coeff = (mls_order_ + 1) * (mls_order_ + 2) / 2;
-    required_neighbors_ = 5 * nr_coeff;
-
-    boundary_angle_threshold_ = M_PI_2;
+    setRho(AFRONT_DEFAULT_RHO);
+    setReduction(AFRONT_DEFAULT_REDUCTION);
+    setNumberOfThreads(AFRONT_DEFAULT_THREADS);
+    setPolynomialOrder(AFRONT_DEFAULT_POLYNOMIAL_ORDER);
+    setBoundaryAngleThreshold(AFRONT_DEFAULT_BOUNDARY_ANGLE_THRESHOLD);
   }
 
-  bool AfrontMeshing::initMesher(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud)
+  void AfrontMeshing::setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud)
   {
-    std::printf("\x1B[36mInitializing Mesher (Size: %i)!\x1B[0m\n", (int)cloud->points.size());
+    PCL_INFO("Initializing Mesher (Size: %i)!\n", (int)cloud->points.size());
     input_cloud_ = cloud;
+    input_cloud_tree_ = pcl::search::KdTree<pcl::PointXYZ>::Ptr(new pcl::search::KdTree<pcl::PointXYZ>);
+    input_cloud_tree_->setInputCloud(input_cloud_);
+  }
+
+  bool AfrontMeshing::initialize()
+  {
+    initialized_ = false;
+
+    // Check the only parameter that does not have a default.
+    if (search_radius_ <= 0)
+    {
+      PCL_ERROR ("Invalid search radius (%f)!\n", search_radius_);
+      return false;
+    }
 
     // Generate the MLS surface
     if (!computeGuidanceField())
     {
-      std::printf("\x1B[31m\tFailed to compute Guidance Field! Try increasing radius.\x1B[0m\n");
+      PCL_ERROR("Failed to compute Guidance Field! Try increasing radius.\n");
       return false;
     }
 
-    pcl::io::savePCDFile("mls.pcd", *mls_cloud_);
-
     // Create first triangle
     createFirstTriangle(rand() % mls_cloud_->size());
+
+    initialized_ = true;
 
     #ifdef AFRONTDEBUG
     viewer_ = pcl::visualization::PCLVisualizer::Ptr(new pcl::visualization::PCLVisualizer("3D Viewer"));
@@ -82,11 +95,8 @@ namespace afront_meshing
 
   bool AfrontMeshing::computeGuidanceField()
   {
-    std::printf("\x1B[36mComputing Guidance Field!\x1B[0m\n");
+    PCL_INFO("Computing Guidance Field!\n");
     auto start = std::chrono::high_resolution_clock::now();
-
-    input_cloud_tree_ = pcl::search::KdTree<pcl::PointXYZ>::Ptr(new pcl::search::KdTree<pcl::PointXYZ>);
-    input_cloud_tree_->setInputCloud(input_cloud_);
 
     // Calculate MLS
     mls_cloud_ = pcl::PointCloud<pcl::PointNormal>::Ptr(new pcl::PointCloud<pcl::PointNormal>());
@@ -98,7 +108,7 @@ namespace afront_meshing
     mls_.setPolynomialFit(true);
     mls_.setPolynomialOrder(mls_order_);
     mls_.setSearchMethod(input_cloud_tree_);
-    mls_.setSearchRadius(r_);
+    mls_.setSearchRadius(search_radius_);
 
     // Adding the Distinct cloud is to force the storing of the mls results.
     mls_.setUpsamplingMethod(pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal>::DISTINCT_CLOUD);
@@ -113,7 +123,7 @@ namespace afront_meshing
     mls_cloud_tree_->setInputCloud(mls_cloud_);
 
     std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start;
-    std::printf("\x1B[36mComputing Guidance Field Finished (%f sec)!\x1B[0m\n", elapsed.count());
+    PCL_INFO("Computing Guidance Field Finished (%f sec)!\n", elapsed.count());
     return true;
   }
 
@@ -132,22 +142,34 @@ namespace afront_meshing
     return pn;
   }
 
-  void AfrontMeshing::generateMesh()
+  void AfrontMeshing::reconstruct()
   {
-    std::printf("\x1B[36mMeshing Started!\x1B[0m\n");
+    if (!initialized_)
+    {
+      PCL_ERROR("Afront mesher has not been initialized!\n");
+      return;
+    }
+
+    PCL_INFO("Meshing Started!\n");
     auto start = std::chrono::high_resolution_clock::now();
     while (!finished_)
-      stepMesh();
+      stepReconstruction();
 
     std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start;
-    std::printf("\x1B[36mMeshing Finished (%f sec)!\x1B[0m\n", elapsed.count());
+    PCL_INFO("Meshing Finished (%f sec)!\n", elapsed.count());
   }
 
-  void AfrontMeshing::stepMesh()
+  void AfrontMeshing::stepReconstruction()
   {
     if (finished_)
     {
-      std::printf("\x1B[31mTried to step mesh after it has finished meshing!\x1B[0m\n");
+      PCL_WARN("Tried to step mesh after it has finished meshing!\n");
+      return;
+    }
+
+    if (!initialized_)
+    {
+      PCL_ERROR("Afront mesher has not been initialized!\n");
       return;
     }
 
@@ -221,33 +243,32 @@ namespace afront_meshing
     }
     else
     {
-      // If we can not cut ear then try and grow.
       PredictVertexResults pvr = predictVertex(afront);
 
       #ifdef AFRONTDEBUG
       if (pvr.status == PredictVertexResults::Valid)
       {
-        pcl::PolygonMesh mls_surface = getPolynomialSurface(pvr, r_/50);
+        pcl::PolygonMesh mls_surface = getPolynomialSurface(pvr, search_radius_/50);
         viewer_->addPolygonMesh(mls_surface, "MLSSurface", 4);
       }
 
       Eigen::Vector3f cpt = (mls_cloud_->at(pvr.pv.closest)).getVector3fMap();
-      viewer_->addSphere(utils::convertEigenToPCL(cpt), 0.1 * r_, 255, 0, 0, "MLSClosest", 4);
+      viewer_->addSphere(utils::convertEigenToPCL(cpt), 0.1 * search_radius_, 255, 0, 0, "MLSClosest", 4);
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSClosest", 4);
 
       Eigen::Vector3f projected_pt = pvr.pv.point.getVector3fMap();
-      viewer_->addSphere(utils::convertEigenToPCL(cpt), r_, 0, 255, 128, "MLSRadius", 4);
+      viewer_->addSphere(utils::convertEigenToPCL(cpt), search_radius_, 0, 255, 128, "MLSRadius", 4);
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSRadius", 4);
 
       pcl::PointXYZ mls_mean = utils::convertEigenToPCL(pvr.pv.mls.mean);
-      Eigen::Vector3d mls_xaxis = pvr.pv.mls.mean + 0.1 * r_ * pvr.pv.mls.u_axis;
-      Eigen::Vector3d mls_yaxis = pvr.pv.mls.mean + 0.1 * r_ * pvr.pv.mls.v_axis;
-      Eigen::Vector3d mls_zaxis = pvr.pv.mls.mean + 0.1 * r_ * pvr.pv.mls.plane_normal;
+      Eigen::Vector3d mls_xaxis = pvr.pv.mls.mean + 0.1 * search_radius_ * pvr.pv.mls.u_axis;
+      Eigen::Vector3d mls_yaxis = pvr.pv.mls.mean + 0.1 * search_radius_ * pvr.pv.mls.v_axis;
+      Eigen::Vector3d mls_zaxis = pvr.pv.mls.mean + 0.1 * search_radius_ * pvr.pv.mls.plane_normal;
       viewer_->addLine(mls_mean, utils::convertEigenToPCL(mls_xaxis), 255, 0, 0, "MLSXAxis", 4);
       viewer_->addLine(mls_mean, utils::convertEigenToPCL(mls_yaxis), 0, 255, 0, "MLSYAxis", 4);
       viewer_->addLine(mls_mean, utils::convertEigenToPCL(mls_zaxis), 0, 0, 255, "MLSZAxis", 4);
 
-      viewer_->addSphere(utils::convertEigenToPCL(projected_pt), 0.02 * r_, 255, 128, 0, "MLSProjection", 4);
+      viewer_->addSphere(utils::convertEigenToPCL(projected_pt), 0.02 * search_radius_, 255, 128, 0, "MLSProjection", 4);
       viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "MLSProjection", 4);
 
       p3 = utils::convertEigenToPCL(pvr.tri.p[2]);
@@ -442,7 +463,7 @@ namespace afront_meshing
 
   void AfrontMeshing::cutEar(const CutEarData &ccer)
   {
-//    assert(ccer.tri.point_valid);
+    assert(ccer.tri.point_valid);
     if (ccer.tri.B > max_edge_length_)
       max_edge_length_ = ccer.tri.B;
 
@@ -508,7 +529,6 @@ namespace afront_meshing
   AfrontMeshing::CutEarData AfrontMeshing::getNextHalfEdge(const FrontData &front) const
   {
     CutEarData next;
-    next.type = CutEarData::NextHalfEdge;
     next.primary = front.he;
     next.secondary = mesh_.getNextHalfEdgeIndex(front.he);
     next.vi[0] = front.vi[0];
@@ -552,7 +572,6 @@ namespace afront_meshing
   AfrontMeshing::CutEarData AfrontMeshing::getPrevHalfEdge(const FrontData &front) const
   {
     CutEarData prev;
-    prev.type = CutEarData::PrevHalfEdge;
     prev.primary = front.he;
     prev.secondary = mesh_.getPrevHalfEdgeIndex(front.he);
     prev.vi[0] = front.vi[0];
@@ -659,7 +678,7 @@ namespace afront_meshing
     std::vector<int> K;
     std::vector<float> K_dist;
 
-    mesh_tree_->radiusSearch(pvr.pv.point, 1.0 * pvr.afront.front.max_step, K, K_dist);
+    mesh_tree_->radiusSearch(pvr.pv.point, pvr.afront.front.max_step, K, K_dist);
 
     results.fences.reserve(K.size());
     results.verticies.reserve(K.size());
@@ -812,12 +831,11 @@ namespace afront_meshing
     // If either the prev or next half edge vertice is with in tolerance default to it
     // over closest distant point.
     // TODO: Should we be checking if triangle normals are valid?  
-    double ar_tol = 0.85;
     double prev_dist = utils::distPoint2Line(pvr.afront.prev.tri.p[0], pvr.afront.prev.tri.p[2], pvr.tri.p[2]).d;
     double next_dist = utils::distPoint2Line(pvr.afront.next.tri.p[1], pvr.afront.next.tri.p[2], pvr.tri.p[2]).d;
     if (pvr.afront.prev.tri.point_valid && pvr.afront.next.tri.point_valid)
     {
-      if (pvr.afront.prev.tri.aspect_ratio >= ar_tol || pvr.afront.next.tri.aspect_ratio >= ar_tol)
+      if (pvr.afront.prev.tri.aspect_ratio >= AFRONT_ASPECT_RATIO_TOLERANCE || pvr.afront.next.tri.aspect_ratio >= AFRONT_ASPECT_RATIO_TOLERANCE)
       {
         if (pvr.afront.prev.tri.aspect_ratio > pvr.afront.next.tri.aspect_ratio)
         {
@@ -838,7 +856,7 @@ namespace afront_meshing
       {
         if (prev_dist < next_dist)
         {
-          if (prev_dist < 0.5 * pvr.afront.front.max_step)
+          if (prev_dist < AFRONT_CLOSE_PROXIMITY_FACTOR * pvr.afront.front.max_step)
           {
             results.found = true;
             results.dist = prev_dist;
@@ -848,7 +866,7 @@ namespace afront_meshing
         }
         else
         {
-          if (next_dist < 0.5 * pvr.afront.front.max_step)
+          if (next_dist < AFRONT_CLOSE_PROXIMITY_FACTOR * pvr.afront.front.max_step)
           {
             results.found = true;
             results.dist = next_dist;
@@ -858,14 +876,14 @@ namespace afront_meshing
         }
       }
     }
-    else if ((pvr.afront.prev.tri.point_valid && prev_dist < 0.5 * pvr.afront.front.max_step) || (pvr.afront.prev.tri.point_valid && pvr.afront.prev.tri.aspect_ratio >= ar_tol))
+    else if ((pvr.afront.prev.tri.point_valid && prev_dist < AFRONT_CLOSE_PROXIMITY_FACTOR * pvr.afront.front.max_step) || (pvr.afront.prev.tri.point_valid && pvr.afront.prev.tri.aspect_ratio >= AFRONT_ASPECT_RATIO_TOLERANCE))
     {
       results.found = true;
       results.dist = prev_dist;
       results.closest = pvr.afront.prev.vi[2];
       results.tri = pvr.afront.prev.tri;
     }
-    else if ((pvr.afront.next.tri.point_valid && next_dist < 0.5 * pvr.afront.front.max_step) || (pvr.afront.next.tri.point_valid && pvr.afront.next.tri.aspect_ratio >= ar_tol))
+    else if ((pvr.afront.next.tri.point_valid && next_dist < AFRONT_CLOSE_PROXIMITY_FACTOR * pvr.afront.front.max_step) || (pvr.afront.next.tri.point_valid && pvr.afront.next.tri.aspect_ratio >= AFRONT_ASPECT_RATIO_TOLERANCE))
     {
       results.found = true;
       results.dist = next_dist;
@@ -893,7 +911,7 @@ namespace afront_meshing
         Eigen::Vector3f p2 = mesh_vertex_data_[vi[1].get()].getVector3fMap();
 
         utils::DistPoint2LineResults dist = utils::distPoint2Line(p1, p2, pvr.tri.p[2]);
-        if (dist.d < 0.5 * pvr.afront.front.max_step)
+        if (dist.d < AFRONT_CLOSE_PROXIMITY_FACTOR * pvr.afront.front.max_step)
         {
 
           bool check_p1 = isPointValid(pvr.afront.front, p1);
@@ -938,7 +956,7 @@ namespace afront_meshing
     #ifdef AFRONTDEBUG
     Eigen::Vector3f p;
     p = pvr.tri.p[2];
-    viewer_->addSphere(utils::convertEigenToPCL(p), 0.5 * pvr.afront.front.max_step, 0, 255, 128, "ProxRadius", 1);
+    viewer_->addSphere(utils::convertEigenToPCL(p), AFRONT_CLOSE_PROXIMITY_FACTOR * pvr.afront.front.max_step, 0, 255, 128, "ProxRadius", 1);
     viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_OPACITY, 0.2, "ProxRadius", 1);
     #endif
 
@@ -992,14 +1010,14 @@ namespace afront_meshing
     }
 
     utils::IntersectionLine2PlaneResults lpr;
-    if (afront.next.tri.point_valid && isFenceViolated(afront.front.p[0], tri.p[2], afront.next.secondary, 2.0 * afront.next.tri.B * hausdorff_error_, lpr))
+    if (afront.next.tri.point_valid && isFenceViolated(afront.front.p[0], tri.p[2], afront.next.secondary, AFRONT_FENCE_HEIGHT_FACTOR * afront.next.tri.B * hausdorff_error_, lpr))
     {
       closest = afront.next.vi[2];
       tri = afront.next.tri;
       return true;
     }
 
-    if (afront.prev.tri.point_valid && isFenceViolated(afront.front.p[1], tri.p[2], afront.prev.secondary, 2.0 * afront.prev.tri.C * hausdorff_error_, lpr))
+    if (afront.prev.tri.point_valid && isFenceViolated(afront.front.p[1], tri.p[2], afront.prev.secondary, AFRONT_FENCE_HEIGHT_FACTOR * afront.prev.tri.C * hausdorff_error_, lpr))
     {
       closest = afront.prev.vi[2];
       tri = afront.prev.tri;
@@ -1026,8 +1044,6 @@ namespace afront_meshing
     Eigen::Vector3f sp_proj = sp - (sp - he_p1).dot(n) * n;
     Eigen::Vector3f ep_proj = ep - (ep - he_p1).dot(n) * n;
     lpr = utils::intersectionLine2Plane(sp_proj, ep_proj, he_p1, u, v);
-
-//    lpr = utils::intersectionLine2Plane(sp, ep, he_p1, u, v);
 
     if (!lpr.parallel) // May need to add additional check if parallel
       if (lpr.mw <= 1 && lpr.mw >= 0)      // This checks if line segement intersects the plane
@@ -1223,7 +1239,7 @@ namespace afront_meshing
     v << mls_.getMLSResult(index).v_axis.cast<float>().array(), 0.0;
 
     // Need to modify mls library to store indicies instead of just the number of neighbors
-    mls_cloud_tree_->radiusSearch(closest, r_, K, K_dist);
+    mls_cloud_tree_->radiusSearch(closest, search_radius_, K, K_dist);
 
     if (K.size () < 3)
       return (false);
@@ -1300,6 +1316,7 @@ namespace afront_meshing
     pcl::PointXYZINormal p = pvr.pv.point;
     p.intensity = getMaxStep(pvr.tri.p[2]);
     FaceIndex fi = mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(p), new_fd);
+//    mesh_octree_->addPointFromCloud();
 
     if (pvr.tri.B > max_edge_length_)
       max_edge_length_ = pvr.tri.B;
@@ -1388,7 +1405,7 @@ namespace afront_meshing
     bool finished = false;
     while (pcnt < (mls_cloud_->points.size() - 1))
     {
-      int cnt = mls_cloud_tree_->radiusSearch(pn, (j + 1) * r_, k, k_dist);
+      int cnt = mls_cloud_tree_->radiusSearch(pn, (j + 1) * search_radius_, k, k_dist);
       for(int i = pcnt; i < cnt; ++i)
       {
         int neighbors = mls_.getMLSResult(i).num_neighbors;
@@ -1420,7 +1437,9 @@ namespace afront_meshing
     }
 
     if (!finished)
-      std::printf("\x1B[32m  Warning Max Step Not Found! Length: %f\x1B[0m\n", len);
+    {
+      PCL_ERROR("Warning Max Step Not Found! Length: %f\n", len);
+    }
 
     return len;
   }
@@ -1460,7 +1479,7 @@ namespace afront_meshing
     result.b = atan2(sina, cosa);
 
     area = 0.5 * top;
-    result.aspect_ratio = (4 * area * std::sqrt(3)) / (result.A * result.A + result.B * result.B + result.C * result.C);
+    result.aspect_ratio = (4.0 * area * std::sqrt(3)) / (result.A * result.A + result.B * result.B + result.C * result.C);
     result.normal = cross.normalized();
     utils::alignNormal(result.normal, front.n[0]);
     assert(!std::isnan(result.normal[0]));
@@ -1536,7 +1555,7 @@ namespace afront_meshing
     }
     else
     {
-      std::printf("\x1B[32m\tUnable to perform merge, invalid face index!\x1B[0m\n");
+      PCL_ERROR("Unable to perform merge, invalid face index!\n");
       return false;
     }
   }
@@ -1610,17 +1629,17 @@ namespace afront_meshing
   {
     pcl::PointCloud<pcl::PointXYZ>::Ptr poly (new pcl::PointCloud<pcl::PointXYZ> ());
 
-    int wh = 2 * r_/step + 1;
+    int wh = 2 * search_radius_/step + 1;
     poly->width = wh;
     poly->height = wh;
     poly->points.resize(wh * wh);
     int npoints = 0;
     for (auto i = 0; i < wh; i++)
     {
-      double u = i * step - r_;
+      double u = i * step - search_radius_;
       for (auto j = 0; j < wh; j++)
       {
-        double v = j * step - r_;
+        double v = j * step - search_radius_;
         double w = mls_.getPolynomialValue(u, v, pvr.pv.mls);
         poly->points[npoints].x = static_cast<float> (pvr.pv.mls.mean[0] + pvr.pv.mls.u_axis[0] * u + pvr.pv.mls.v_axis[0] * v + pvr.pv.mls.plane_normal[0] * w);
         poly->points[npoints].y = static_cast<float> (pvr.pv.mls.mean[1] + pvr.pv.mls.u_axis[1] * u + pvr.pv.mls.v_axis[1] * v + pvr.pv.mls.plane_normal[1] * w);
@@ -1654,7 +1673,7 @@ namespace afront_meshing
           {
             try
             {
-              stepMesh();
+              stepReconstruction();
             }
             catch (const std::exception& e)
             {

@@ -13,6 +13,8 @@ int main(int argc, char **argv)
   double rho;
   double reduction;
   double radius;
+  double boundary_angle;
+  int order;
   int sample;
   int threads;
   std::string extension;
@@ -43,17 +45,13 @@ int main(int argc, char **argv)
     return 0;
   }
 
-  nh.param<double>("rho", rho, 0.5);
-  nh.param<double>("radius", radius, 0.1);
+  nh.param<double>("rho", rho, afront_meshing::AFRONT_DEFAULT_RHO);
+  nh.param<double>("radius", radius, 0);
   nh.param<int>("sample", sample, 0);
-  nh.param<double>("reduction", reduction, 0.8);
-  nh.param<int>("threads", threads, 1);
-
-  if (reduction >= 1 || reduction <= 0)
-  {
-    ROS_ERROR("Reduction must be (0 < reduction < 1)");
-    return 0;
-  }
+  nh.param<double>("reduction", reduction, afront_meshing::AFRONT_DEFAULT_REDUCTION);
+  nh.param<int>("threads", threads, afront_meshing::AFRONT_DEFAULT_THREADS);
+  nh.param<int>("order", order, afront_meshing::AFRONT_DEFAULT_POLYNOMIAL_ORDER);
+  nh.param<double>("boundary_angle", boundary_angle, afront_meshing::AFRONT_DEFAULT_BOUNDARY_ANGLE_THRESHOLD);
 
   pcl::PointCloud<pcl::PointXYZ> cloud, filtered_cloud;
   afront_meshing::AfrontMeshing mesher;
@@ -72,22 +70,28 @@ int main(int argc, char **argv)
   std::vector<int> indices;
   pcl::removeNaNFromPointCloud(cloud, filtered_cloud, indices);
 
-  sleep(5);
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(filtered_cloud));
   mesher.setRho(rho);
   mesher.setReduction(reduction);
-  mesher.setRadius(radius);
+  mesher.setSearchRadius(radius);
   mesher.setNumberOfThreads(threads);
+  mesher.setPolynomialOrder(order);
+  mesher.setBoundaryAngleThreshold(boundary_angle);
+  mesher.setInputCloud(in_cloud);
 
-  if (mesher.initMesher(in_cloud))
+  if (mesher.initialize())
   {
     if (sample == 0)
-      mesher.generateMesh();
+      mesher.reconstruct();
     else
       for (auto i = 0; i < sample; ++i)
-        mesher.stepMesh();
+        mesher.stepReconstruction();
 
     pcl::io::savePLYFile(output_file, mesher.getMesh());
+  }
+  else
+  {
+    ROS_ERROR("Failed to initialize AFront Mesher!");
   }
 
   return 0;

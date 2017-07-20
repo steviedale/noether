@@ -7,10 +7,20 @@
 
 #include <meshing/mls_sampling.h>
 #include <meshing/afront_utils.h>
-#define AFRONTDEBUG
-//#undef AFRONTDEBUG
+//#define AFRONTDEBUG
+#undef AFRONTDEBUG
 namespace afront_meshing
 {
+  const double AFRONT_DEFAULT_REDUCTION = 0.8;
+  const double AFRONT_DEFAULT_RHO = 0.9;
+  const int    AFRONT_DEFAULT_THREADS = 1;
+  const int    AFRONT_DEFAULT_POLYNOMIAL_ORDER = 2;
+  const double AFRONT_DEFAULT_BOUNDARY_ANGLE_THRESHOLD = M_PI_2;
+
+  const double AFRONT_ASPECT_RATIO_TOLERANCE = 0.85;
+  const double AFRONT_CLOSE_PROXIMITY_FACTOR = 0.5;
+  const double AFRONT_FENCE_HEIGHT_FACTOR = 2.0;
+
   class AfrontMeshing
   {
     struct MeshTraits
@@ -88,13 +98,6 @@ namespace afront_meshing
 
     struct CutEarData
     {
-      enum CutEarDataTypes
-      {
-        PrevHalfEdge = 0,     /**< @brief Can cut ear results with previous half edge. */
-        NextHalfEdge = 1,     /**< @brief Can cut ear results with next half edge. */
-      };
-
-      CutEarDataTypes type;    /**< @brief Identifies whether generated using previous or next half edge */
       HalfEdgeIndex primary;   /**< @brief The advancing front half edge */
       HalfEdgeIndex secondary; /**< @brief The Secondary half edge triangle (Previouse or Next) */
       VertexIndex vi[3];       /**< @brief The vertex indicies of the potential triangle */
@@ -150,9 +153,9 @@ namespace afront_meshing
     struct TriangleToCloseResults
     {
       PredictVertexResults pvr;                 /**< @brief The predicted vertex information provided */
-      VertexIndex closest;
+      VertexIndex closest;                      /**< @brief The closest vertex index */
       TriangleData tri;                         /**< @brief The Triangle information */
-      bool found;
+      bool found;                               /**< @brief True if triangle is close, otherwise false */
     };
 
   public:
@@ -162,14 +165,14 @@ namespace afront_meshing
     /** @brief AfrontMeshing Destructor */
     ~AfrontMeshing() {}
 
-    /** @brief This sets everything up for meshing */
-    bool initMesher(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
+    /** @brief This will process the input parameters and comput the guidance field */
+    bool initialize();
 
-    /** @brief This will mesh the point cloud passed to the initMesher funciton */
-    void generateMesh();
+    /** @brief This will mesh the point cloud passed to the setInputCloud funciton */
+    void reconstruct();
 
     /** @brief Advance the mesh by adding one triangle */
-    void stepMesh();
+    void stepReconstruction();
 
     /** @brief Indicates if it has finished meshing the surface */
     bool isFinished() {return finished_;}
@@ -185,10 +188,22 @@ namespace afront_meshing
     pcl::visualization::PCLVisualizer::Ptr getViewer() {return viewer_;}
     #endif
 
+    /** @brief This sets everything up for meshing */
+    void setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud);
+
     /** @brief Set the primary variable used to control mesh triangulation size */
     void setRho(double val)
     {
-      rho_ = val;
+      if (val >= M_PI_2 || val <= 0)
+      {
+        PCL_ERROR("AFront rho must be between 0 and PI/2. Using default value.\n");
+        rho_ = AFRONT_DEFAULT_RHO;
+      }
+      else
+      {
+        rho_ = val;
+      }
+
       hausdorff_error_ = (1.0 - sqrt((1.0 + 2.0 * cos(rho_)) / 3.0)) * (1.0 / (2.0 * sin(rho_ / 2)));
       updateTriangleTolerances();
     }
@@ -199,7 +214,15 @@ namespace afront_meshing
     /** @brief Set how fast can the mesh grow and shrink. (val < 1.0) */
     void setReduction(double val)
     {
-      (val >= 1 || val <= 0) ? reduction_ = 0.8 : reduction_ = val;
+      if (val >= 1 || val <= 0)
+      {
+        PCL_ERROR("AFront reduction must be between 0 and 1. Using default value.\n");
+        reduction_ = AFRONT_DEFAULT_REDUCTION;
+      }
+      else
+      {
+        reduction_ = val;
+      }
       updateTriangleTolerances();
     }
 
@@ -207,13 +230,65 @@ namespace afront_meshing
     double getReduction() const {return reduction_;}
 
     /** @brief Set the mls radius used for smoothing */
-    void setRadius(double val){r_ = val;}
+    void setSearchRadius(double val)
+    {
+      search_radius_ = val;
+    }
 
     /** @brief Get the mls radius used for smoothing */
-    double getRadius() const {return r_;}
+    double getSearchRadius() const {return search_radius_;}
+
+    /** @brief Set the mls polynomial order */
+    void setPolynomialOrder(const int order)
+    {
+      if (order < 2)
+      {
+        PCL_ERROR("AFront polynomial order must be greater than 1. Using default value.\n");
+        mls_order_ = AFRONT_DEFAULT_POLYNOMIAL_ORDER;
+      }
+      else
+      {
+        mls_order_ = order;
+      }
+
+      int nr_coeff = (mls_order_ + 1) * (mls_order_ + 2) / 2;
+      required_neighbors_ = 5 * nr_coeff;
+    }
+
+    /** @brief Get the mls polynomial order */
+    int getPolynomialOrder() const {return mls_order_;}
+
+    /** @brief Set the boundary angle threshold used to determine if a point is on the boundary of the point cloud. */
+    void setBoundaryAngleThreshold(const double angle)
+    {
+      if (angle <= 0)
+      {
+        PCL_ERROR("AFront boundary angle threshold must be greater than 0. Using default value.\n");
+        boundary_angle_threshold_ = AFRONT_DEFAULT_BOUNDARY_ANGLE_THRESHOLD;
+      }
+      else
+      {
+        boundary_angle_threshold_ = angle;
+      }
+    }
+
+    /** @brief Get the boundary angle threshold used to determine if a point is on the boundary of the point cloud. */
+    double getBoundaryAngleThreshold() const {return boundary_angle_threshold_;}
+
 
     /** @brief Set the number of threads to use */
-    void setNumberOfThreads(const int threads) {threads_ = threads_;}
+    void setNumberOfThreads(const int threads)
+    {
+      if (threads <= 0)
+      {
+        PCL_ERROR("AFront number of threads must be greater than 0. Using default value.\n");
+        threads_ = AFRONT_DEFAULT_THREADS;
+      }
+      else
+      {
+        threads_ = threads;
+      }
+    }
 
     /** @brief Get the number of threads to use */
     int getNumberOfThreads() {return threads_;}
@@ -228,10 +303,39 @@ namespace afront_meshing
     /** @brief Check if features of the existing mesh are in close proximity to the proposed new triangle. */
     CloseProximityResults isCloseProximity(const PredictVertexResults &pvr) const;
 
+    /**
+     * @brief Check if a line intersects a mesh half edge fence.
+     * @param sp Origin point of the line
+     * @param ep Terminating point of the line
+     * @param fence The half edge index
+     * @param fence_height The height of the fence.
+     * @param lpr The results of the line plane intersection
+     * @return True if line interesects fence, otherwise false
+     */
     bool isFenceViolated(const Eigen::Vector3f &sp, const Eigen::Vector3f &ep, const HalfEdgeIndex &fence, const double fence_height, utils::IntersectionLine2PlaneResults &lpr) const;
 
+    /**
+     * @brief Check if a line intersects a list of fences.
+     * @param vi The vertex index representing the origin of the line.
+     * @param p The terminating point of the line
+     * @param fences The list of half edge indexes
+     * @param closest The closest point in the mesh if one exists
+     * @param pvr The predicted vertex results data
+     * @return FenceViolationResults
+     */
     FenceViolationResults isFencesViolated(const VertexIndex &vi, const Eigen::Vector3f &p, const std::vector<HalfEdgeIndex> &fences, const VertexIndex &closest, const PredictVertexResults &pvr) const;
 
+    /**
+     * @brief Check if the proposed triangle interferes with the previous or next half edge.
+     *
+     * If it does interfere the input variable tri will be modified to represent a tri created
+     * by either the previous or next half edge.
+     *
+     * @param afront The advancing front data
+     * @param tri The proposed triangle
+     * @param closest The closest point in the mesh if one exists
+     * @return True if it does interfere, otherwise false
+     */
     bool checkPrevNextHalfEdge(const AdvancingFrontData &afront, TriangleData &tri, VertexIndex &closest) const;
 
     /** @brief Check if the proposed triangle is to close to the existing mesh. */
@@ -242,9 +346,6 @@ namespace afront_meshing
 
     /** @brief Merge triangle with the existing mesh */
     void merge(const TriangleToCloseResults &ttcr);
-
-    /** @brief Perform a topology event. This may modify the existing mesh to create quality triangles */
-//    void topologyEvent(const TriangleToCloseResults &ttcr);
 
     /** @brief Perform an ear cut operation */
     void cutEar(const CutEarData &ccer);
@@ -335,7 +436,7 @@ namespace afront_meshing
     /** @brief Update the allowed triangle tolerances. */
     void updateTriangleTolerances()
     {
-      vertex_normal_tol_ = 1.6 * (rho_ / reduction_); // 1.6 because close proximity allows 0.5
+      vertex_normal_tol_ = (1.0 + AFRONT_CLOSE_PROXIMITY_FACTOR) * (rho_ / reduction_);
       triangle_normal_tol_ = vertex_normal_tol_ / 2.0;
     }
 
@@ -348,6 +449,7 @@ namespace afront_meshing
     /** @brief This is a direct copy of the pcl isBoundaryPoint function */
     bool isBoundaryPoint(const int index) const;
 
+    /** @brief Generate a plygon mesh that represent the mls polynomial surface. */
     pcl::PolygonMesh getPolynomialSurface(const PredictVertexResults &pvr, const double step) const;
 
     #ifdef AFRONTDEBUG
@@ -363,35 +465,38 @@ namespace afront_meshing
     pcl::PointCloud<pcl::PointXYZ>::Ptr input_cloud_;
     pcl::search::KdTree<pcl::PointXYZ>::Ptr input_cloud_tree_;
 
-    double rho_;
-    double reduction_;
-    double r_;
+    double rho_;           /**< @brief The angle of the osculating circle where a triangle edge should optimally subtend */
+    double reduction_;     /**< @brief The allowed percent reduction from triangle to triangle. */
+    double search_radius_; /**< @brief The search radius used by mls */
+    int mls_order_;        /**< @brief The degree of the polynomial used by mls */
+    int threads_;          /**< @brief The number of threads to be used by mls */
 
     // Algorithm Data
     double hausdorff_error_;
     double max_edge_length_;          /**< @brief This can be used to calculate the max error fo the reconstruction (max_edge_length_ * hausdorff_error_) */
     int required_neighbors_;          /**< @brief This the required number of neighbors for a given point found during the MLS. */
-    double vertex_normal_tol_;         /**< @brief The angle tolerance for vertex normals for a given triangle */
-    double triangle_normal_tol_;       /**< @brief The angle tolerance for the triangle normal relative to vertex normals */
+    double vertex_normal_tol_;        /**< @brief The angle tolerance for vertex normals for a given triangle */
+    double triangle_normal_tol_;      /**< @brief The angle tolerance for the triangle normal relative to vertex normals */
     double boundary_angle_threshold_; /**< @brief The boundary angle threshold */
 
     // Guidance field data
-    int mls_order_;
     MLSSampling mls_;
     pcl::PointCloud<pcl::PointNormal>::Ptr mls_cloud_;
     pcl::search::KdTree<pcl::PointNormal>::Ptr mls_cloud_tree_;
-    int threads_;
 
     // Generated data
     Mesh mesh_; /**< The mesh object for inserting faces/vertices */
     pcl::PointCloud<MeshTraits::VertexData> &mesh_vertex_data_;
     pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_copy_;
     pcl::search::KdTree<MeshTraits::VertexData>::Ptr mesh_tree_;
+//    pcl::octree::OctreePointCloud<MeshTraits::VertexData>::Ptr mesh_octree_;
+//    pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_octree_;
 
     // Algorithm Status Data
     std::deque<HalfEdgeIndex> queue_;
     std::vector<HalfEdgeIndex> boundary_;
     bool finished_;
+    bool initialized_;
 
     // Debug
     #ifdef AFRONTDEBUG

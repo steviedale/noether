@@ -5,6 +5,10 @@
 
 namespace afront_meshing
 {
+  const double MLS_CONVERGENCE_TOLERANCE = 1e-8;
+  const double MLS_MINIMUM_CURVATURE = 1e-5;
+
+
   class MLSSampling : public pcl::MovingLeastSquaresOMP<pcl::PointXYZ, pcl::PointNormal>
   {
   public:

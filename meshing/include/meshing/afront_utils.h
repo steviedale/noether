@@ -94,7 +94,7 @@ namespace utils
   }
 
   /**
-  * @brief Get the length of a half edge given it's verticies
+  * @brief Get the distance between two points
   * @param p1 Vertex of half edge
   * @param p2 Vectex of half edge
   * @return The lenght of the half edge
@@ -112,6 +112,13 @@ namespace utils
     double d;                  /**< @brief The distance between point and line segments */
   };
 
+  /**
+   * @brief Get the distance between a point and line
+   * @param p1 Origin point of the line
+   * @param p2 Terminating point of the line
+   * @param p The point for calulating the distance to the line
+   * @return DistPoint2LineResults
+   */
   DistPoint2LineResults distPoint2Line(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p)
   {
     DistPoint2LineResults results;
@@ -143,7 +150,7 @@ namespace utils
   {
     Eigen::Vector3f points[4]; /**< @brief The line segment points. Note: Seg1 = (points[1] - points[0]) and Seg2 = (points[3] - points[2]) */
     Eigen::Vector3f p[2];      /**< @brief The closest point on each line segment. Note: p[0] is the closet point on Seg1. */
-    float mu[2];              /**< @brief The corresponding line paramentric value resulting in the minimum distance. */
+    float mu[2];               /**< @brief The corresponding line paramentric value resulting in the minimum distance. */
     double d;                  /**< @brief The distance between both line segments */
     bool parallel;             /**< @brief Indicate that both lines are parallel. */
   };
@@ -152,11 +159,11 @@ namespace utils
    * @brief Distance between two line segments
    *
    * Follow the link for more details http://paulbourke.net/geometry/pointlineplane/
-   * @param p1
-   * @param p2
-   * @param p3
-   * @param p4
-   * @return
+   * @param p1 Origin point of the first line
+   * @param p2 Terminating point of the first line
+   * @param p3 Origin point of the second line
+   * @param p4 Terminating point of the second line
+   * @return DistLine2LineResults
    */
   DistLine2LineResults distLine2Line(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &p3, const Eigen::Vector3f &p4)
   {
@@ -237,11 +244,12 @@ namespace utils
 
   /**
    * @brief Find the intersection between a plane and line
-   * @param p1     The start point of the line
-   * @param p2     The end point of the line
+   * @param p1     The origin point of the line
+   * @param p2     The terminating point of the line
    * @param origin The origin of the plane
    * @param u      The vector defining the u direction for the plane
    * @param v      The vector defining the v direction for the plane
+   * @return IntersectionLine2PlaneResults
    */
   IntersectionLine2PlaneResults intersectionLine2Plane(const Eigen::Vector3f &p1, const Eigen::Vector3f &p2, const Eigen::Vector3f &origin, const Eigen::Vector3f &u, const Eigen::Vector3f &v)
   {

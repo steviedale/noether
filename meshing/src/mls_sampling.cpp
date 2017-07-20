@@ -12,8 +12,8 @@ namespace afront_meshing
     for(int i = 0; i < output.size(); ++i)
     {
       double k = calculateCurvature(output[i].getVector3fMap(), i).cwiseAbs().maxCoeff();
-      if (k < 1e-5)
-        k = 1e-5;
+      if (k < MLS_MINIMUM_CURVATURE)
+        k = MLS_MINIMUM_CURVATURE;
 
       output[i].curvature = k;
       if (k > max_curvature_)
@@ -32,11 +32,10 @@ namespace afront_meshing
     double gv = v;
     double gw = 0;
     Eigen::Vector3d normal = mls_result.plane_normal;
-    if (polynomial_fit_ && mls_result.num_neighbors >= 5*nr_coeff_ && pcl_isfinite(mls_result.c_vec[0]))
+    if (polynomial_fit_ && mls_result.num_neighbors >= 5 * nr_coeff_ && pcl_isfinite(mls_result.c_vec[0]))
     {
       PolynomialPartialDerivative d = getPolynomialPartialDerivative(gu, gv, mls_result);
       gw = d.z;
-      double tol = 1e-8;
       double err_total;
       double dist1 = std::abs(gw - w);
       double dist2;
@@ -67,8 +66,8 @@ namespace afront_meshing
         dist2 = std::sqrt((gu - u) * (gu - u) + (gv - v) * (gv - v) + (gw - w) * (gw - w));
 
         err_total = std::sqrt(e1 * e1 + e2 * e2);
-        //std::printf("Distance: %.10e\n", err_total);
-      } while (err_total > tol && dist2 < dist1);
+
+      } while (err_total > MLS_CONVERGENCE_TOLERANCE && dist2 < dist1);
 
       if (dist2 > dist1) // the optimization was diverging
       {
@@ -79,7 +78,6 @@ namespace afront_meshing
       }
       normal -= (d.z_u * mls_result.u_axis + d.z_v * mls_result.v_axis);
     }
-    //std::printf("Start Dist: %.10e\t End Dist: %.10e\n", dist1, dist2);
 
     pcl::PointXYZINormal result;
     result.x = static_cast<float> (mls_result.mean[0] + mls_result.u_axis[0] * gu + mls_result.v_axis[0] * gv + mls_result.plane_normal[0] * gw);
@@ -93,8 +91,8 @@ namespace afront_meshing
 
     Eigen::Vector2f k = calculateCurvature(gu, gv, mls_result);
     result.curvature = k.cwiseAbs().maxCoeff();
-    if (result.curvature < 1e-5)
-      result.curvature = 1e-5;
+    if (result.curvature < MLS_MINIMUM_CURVATURE)
+      result.curvature = MLS_MINIMUM_CURVATURE;
 
     return result;
   }
@@ -102,7 +100,7 @@ namespace afront_meshing
   MLSSampling::SamplePointResults MLSSampling::samplePoint(const pcl::PointXYZ& pt) const
   {
     if (!pcl_isfinite(pt.x))
-      std::cout << "Error: Sample point is not finite\n";
+      PCL_ERROR("MLS Sample point is not finite\n");
 
     SamplePointResults result;
     result.orig = pt;
@@ -163,7 +161,7 @@ namespace afront_meshing
     }
     else
     {
-      std::cout << "Error: Polynomial fit failed! Neighbors: " << mls_result.num_neighbors << "\n";
+      PCL_ERROR("Polynomial fit failed! Neighbors: %d\n", mls_result.num_neighbors);
     }
 
     return k;

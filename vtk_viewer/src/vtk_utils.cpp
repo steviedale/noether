@@ -14,6 +14,7 @@
 #include <pcl/conversions.h>
 #include <pcl/surface/vtk_smoothing/vtk_utils.h>  // MESH conversion utils VTK<->PCL
 #include <pcl/surface/mls.h>
+#include <pcl/filters/filter.h>
 
 #include <pcl/surface/grid_projection.h> // surface reconstruction by Rosie Li based on:
 // Polygonizing Extremal Surfaces with Manifold Guarantees, Ruosi Li, et. al.
@@ -49,6 +50,7 @@
 #include <vtkImplicitSelectionLoop.h>
 #include <vtkClipPolyData.h>
 
+#include <meshing/afront_meshing.h>
 
 namespace vtk_viewer
 {
@@ -234,14 +236,27 @@ bool loadPCDFile(std::string file, vtkSmartPointer<vtkPolyData>& polydata, std::
     }
   }
 
-  pcl::PointCloud<pcl::PointNormal>::Ptr normals = vtk_viewer::pclEstimateNormals(cloud);
-  pcl::PolygonMesh mesh = vtk_viewer::pclGridProjectionMesh(normals);
-  vtk_viewer::pclEncodeMeshAndNormals(mesh, polydata);
+//  pcl::PointCloud<pcl::PointNormal>::Ptr normals = vtk_viewer::pclEstimateNormals(cloud);
+//  pcl::PolygonMesh mesh = vtk_viewer::pclGridProjectionMesh(normals);
 
+  pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud (new pcl::PointCloud<pcl::PointXYZ>);
+  std::vector<int> indices;
+  pcl::removeNaNFromPointCloud(*cloud, *filtered_cloud, indices);
+  afront_meshing::AfrontMeshing mesher;
+  mesher.setRho(0.5);
+  mesher.setReduction(0.8);
+  mesher.setSearchRadius(0.01);
+  mesher.setNumberOfThreads(4);
+  mesher.setInputCloud(filtered_cloud);
 
-  //vtkSurfaceReconstructionMesh(cloud, polydata);
+  if (mesher.initialize())
+  {
+    mesher.reconstruct();
+    vtk_viewer::pclEncodeMeshAndNormals(mesher.getMesh(), polydata);
+    return true;
+  }
 
-  return true;
+  return false;
 }
 
 void vtkSurfaceReconstructionMesh(const pcl::PointCloud<pcl::PointXYZ>::Ptr cloud, vtkSmartPointer<vtkPolyData> &mesh)
@@ -377,7 +392,6 @@ vtkSmartPointer<vtkPolyData> estimateCurvature(vtkSmartPointer<vtkPolyData> mesh
 
 void generateNormals(vtkSmartPointer<vtkPolyData>& data, int flip_normals)
 {
-  // If point data exists but cell data does not, iterate through the cells and generate normals manually
   if(data->GetPointData()->GetNormals() && !data->GetCellData()->GetNormals())
   {
     int size = data->GetNumberOfCells();
@@ -400,15 +414,20 @@ void generateNormals(vtkSmartPointer<vtkPolyData>& data, int flip_normals)
         {
           double p0[3];
           data->GetPointData()->GetNormals()->GetTuple(pts->GetId(j), p0);
-          norm[0] += p0[0];
-          norm[1] += p0[1];
-          norm[2] += p0[2];
+
+          // Based on vtk's api it should return 0 if there is an error
+          if (vtkMath::Normalize(p0) > 0.0)
+          {
+            norm[0] += p0[0];
+            norm[1] += p0[1];
+            norm[2] += p0[2];
+          }
         }
 
-        // average the normals for the cell
-        norm[0] /= pts->GetNumberOfIds();
-        norm[1] /= pts->GetNumberOfIds();
-        norm[2] /= pts->GetNumberOfIds();
+        if (vtkMath::Normalize(norm) <= 0.0)
+        {
+          PCL_ERROR("Could not calculate cell normal from point normals!\n");
+        }
 
         // set the normal for the given cell
         cell_normals->SetTuple(i, norm);
@@ -416,7 +435,7 @@ void generateNormals(vtkSmartPointer<vtkPolyData>& data, int flip_normals)
     }
     data->GetCellData()->SetNormals(cell_normals);
   }
-  else
+  else if (!data->GetPointData()->GetNormals() && !data->GetCellData()->GetNormals())
   {
     vtkSmartPointer<vtkPolyDataNormals> normal_generator = vtkSmartPointer<vtkPolyDataNormals>::New();
     normal_generator->SetInputData(data);
@@ -576,21 +595,40 @@ void pclEncodeMeshAndNormals(const pcl::PolygonMesh &pcl_mesh, vtkSmartPointer<v
 
   pcl::PolygonMesh copy = pcl_mesh;
 
-  // Convert pcl::PCLPointCloud2 -> pcl::PointCloud<T>
-  pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-  pcl::fromPCLPointCloud2(copy.cloud, *temp_cloud);
+  if (!pclPointCloud2HasNormals(copy.cloud))
+  {
+    // Convert pcl::PCLPointCloud2 -> pcl::PointCloud<T>
+    pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::fromPCLPointCloud2(copy.cloud, *temp_cloud);
 
-  // Compute normals and add to original points
-  pcl::PointCloud<pcl::Normal>::Ptr cloud_normals2 = estimateNormals(temp_cloud, radius, view_point);
+    // Compute normals and add to original points
+    pcl::PointCloud<pcl::Normal>::Ptr cloud_normals2 = estimateNormals(temp_cloud, radius, view_point);
 
-  pcl::PointCloud<pcl::PointNormal>::Ptr new_cloud(new pcl::PointCloud<pcl::PointNormal>);
-  pcl::concatenateFields (*temp_cloud, *cloud_normals2, *new_cloud);
+    pcl::PointCloud<pcl::PointNormal>::Ptr new_cloud(new pcl::PointCloud<pcl::PointNormal>);
+    pcl::concatenateFields (*temp_cloud, *cloud_normals2, *new_cloud);
 
-  // Convert pcl::PointCloud<PointNormal> -> pcl::PCLPointCloud2 and store in original mesh object
-  pcl::toPCLPointCloud2(*new_cloud, copy.cloud);
+    // Convert pcl::PointCloud<PointNormal> -> pcl::PCLPointCloud2 and store in original mesh object
+    pcl::toPCLPointCloud2(*new_cloud, copy.cloud);
+  }
 
   // Convert mesh object to VTK
   pcl::VTKUtils::convertToVTK(copy, vtk_mesh);
+}
+
+bool pclPointCloud2HasNormals(const pcl::PCLPointCloud2 &msg)
+{
+  for (auto i = 0; i < msg.fields.size(); ++i)
+  {
+    if (msg.fields[i].name == "normal_x")
+      return true;
+
+    if (msg.fields[i].name == "normal_y")
+      return true;
+
+    if (msg.fields[i].name == "normal_z")
+      return true;
+  }
+  return false;
 }
 
 bool loadPolygonMeshFromPLY(const std::string &file, pcl::PolygonMesh &mesh)

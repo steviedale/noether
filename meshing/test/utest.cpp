@@ -160,15 +160,16 @@ TEST(AfrontTest, TestCase1)
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(cloud));
   std::cout << "number of cloud points: " << in_cloud->points.size() << "\n";
 
-  mesher.setRho(0.05);
-  mesher.setTriangleQuality(1.2);
-  mesher.setRadius(1);
-  mesher.enableSnap(false);
+  mesher.setRho(0.5);
+  mesher.setReduction(0.8);
+  mesher.setSearchRadius(1);
+  mesher.setNumberOfThreads(1);
+  mesher.setInputCloud(in_cloud);
 
-  if(!mesher.initMesher(in_cloud))
+  if(!mesher.initialize())
     std::cout << "failed to initialize mesher\n";
 
-  mesher.generateMesh();
+  mesher.reconstruct();
 }
 
 // Run all the tests that were declared with TEST()
