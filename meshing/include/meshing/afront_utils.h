@@ -2,12 +2,12 @@
 #define AFRONT_UTILS_H
 
 #include <pcl/point_types.h>
+#include <meshing/afront_point_type.h>
 
 namespace afront_meshing
 {
 namespace utils
 {
-
   /** @brief Align pn's normal with av so they point in the same direction */
   bool alignNormal(Eigen::Vector3f &pn, const Eigen::Vector3f &av)
   {
@@ -22,7 +22,7 @@ namespace utils
   }
 
   /** @brief Align pn's normal with av so they point in the same direction */
-  bool alignNormal(pcl::PointXYZINormal &pn, const pcl::PointXYZINormal &av)
+  bool alignNormal(AfrontVertexPointType &pn, const AfrontVertexPointType &av)
   {
     Eigen::Vector3f normal =  pn.getNormalVector3fMap();
     if (alignNormal(normal, av.getNormalVector3fMap()));
@@ -63,22 +63,24 @@ namespace utils
     return pcl::PointXYZ(p(0), p(1), p(2));
   }
 
-  pcl::PointXYZINormal convertPointNormalToPointXYZINormal(const pcl::PointNormal &p)
+  AfrontVertexPointType convertPointNormalToAfrontPointType(const pcl::PointNormal &p)
   {
-    pcl::PointXYZINormal result;
+    AfrontVertexPointType result;
     result.x = p.x; result.y = p.y; result.z = p.z; result.data[3] = 1.0f;
     result.normal_x = p.normal_x; result.normal_y = p.normal_y; result.normal_z = p.normal_z; result.data_n[3] = 0.0f;
     result.curvature = p.curvature;
-    result.intensity = 0.0;
+    result.max_step = 0.0f;
+    result.max_step_search_radius = 0.0f;
     return result;
   }
 
-  pcl::PointNormal convertPointXYZINormalToPointNormal(const pcl::PointXYZINormal &p)
+  AfrontGuidanceFieldPointType convertAfrontPointTypeToAfrontGuidanceFieldPointType(const AfrontVertexPointType &p, const double rho)
   {
-    pcl::PointNormal result;
+    afront_meshing::AfrontGuidanceFieldPointType result;
     result.x = p.x; result.y = p.y; result.z = p.z; result.data[3] = 1.0f;
     result.normal_x = p.normal_x; result.normal_y = p.normal_y; result.normal_z = p.normal_z; result.data_n[3] = 0.0f;
     result.curvature = p.curvature;
+    result.ideal_edge_length = 2.0 * std::sin(rho / 2.0) / result.curvature;
     return result;
   }
 
@@ -283,7 +285,6 @@ namespace utils
     }
     return results;
   }
-
 
 } // namespace utils
 

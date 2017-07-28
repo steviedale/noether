@@ -1,14 +1,37 @@
 #ifndef AFRONT_MESHING_H
 #define AFRONT_MESHING_H
 
-#include <pcl/geometry/polygon_mesh.h>
-#include <pcl/visualization/pcl_visualizer.h>
-#include <deque>
-
-#include <meshing/mls_sampling.h>
-#include <meshing/afront_utils.h>
 //#define AFRONTDEBUG
 #undef AFRONTDEBUG
+
+#include <pcl/geometry/polygon_mesh.h>
+
+#ifdef AFRONTDEBUG
+#include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/visualization/impl/point_cloud_geometry_handlers.hpp>
+#endif
+
+// These are required for using custom point type
+#include <pcl/octree/octree_search.h>
+#include <pcl/octree/impl/octree_search.hpp>
+#include <pcl/octree/octree_pointcloud.h>
+#include <pcl/octree/impl/octree_pointcloud.hpp>
+#include <pcl/kdtree/flann.h>
+#include <pcl/kdtree/kdtree.h>
+#include <pcl/kdtree/kdtree_flann.h>
+#include <pcl/kdtree/impl/kdtree_flann.hpp>
+#include <pcl/search/search.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/search/flann_search.h>
+#include <pcl/search/impl/search.hpp>
+#include <pcl/search/impl/kdtree.hpp>
+#include <pcl/search/impl/flann_search.hpp>
+// End for custom point type
+
+#include <deque>
+#include <meshing/mls_sampling.h>
+#include <meshing/afront_utils.h>
+
 
 namespace afront_meshing
 {
@@ -26,12 +49,12 @@ namespace afront_meshing
   {
     struct MeshTraits
     {
-      typedef pcl::PointXYZINormal  VertexData;
-      typedef int                   HalfEdgeData;
-      typedef int                   EdgeData;
-      typedef pcl::PointNormal      FaceData;
+      typedef AfrontVertexPointType   VertexData;
+      typedef int               HalfEdgeData;
+      typedef int               EdgeData;
+      typedef pcl::PointNormal  FaceData;
 
-      typedef boost::false_type     IsManifold;
+      typedef boost::false_type IsManifold;
     };
 
     typedef pcl::geometry::PolygonMesh<MeshTraits> Mesh;
@@ -87,14 +110,15 @@ namespace afront_meshing
 
     struct FrontData
     {
-      HalfEdgeIndex he;        /**< @brief The half edge index from which to grow the triangle */
-      double length;           /**< @brief The half edge length */
-      double max_step;         /**< @brief The maximum grow distance */
-      Eigen::Vector3f mp;      /**< @brief The half edge mid point */
-      Eigen::Vector3f d;       /**< @brief The half edge grow direction */
-      VertexIndex vi[2];       /**< @brief The half edge vertex indicies */
-      Eigen::Vector3f p[2];    /**< @brief The half edge points (Origninating, Terminating) */
-      Eigen::Vector3f n[2];    /**< @brief The half edge point normals (Origninating, Terminating) */
+      HalfEdgeIndex he;              /**< @brief The half edge index from which to grow the triangle */
+      double length;                 /**< @brief The half edge length */
+      double max_step;               /**< @brief The maximum grow distance */
+      double max_step_search_radius; /**< @brief The approximate search radius for the finding max step for new point. */
+      Eigen::Vector3f mp;            /**< @brief The half edge mid point */
+      Eigen::Vector3f d;             /**< @brief The half edge grow direction */
+      VertexIndex vi[2];             /**< @brief The half edge vertex indicies */
+      Eigen::Vector3f p[2];          /**< @brief The half edge points (Origninating, Terminating) */
+      Eigen::Vector3f n[2];          /**< @brief The half edge point normals (Origninating, Terminating) */
     };
 
     struct CutEarData
@@ -245,19 +269,19 @@ namespace afront_meshing
       if (order < 2)
       {
         PCL_ERROR("AFront polynomial order must be greater than 1. Using default value.\n");
-        mls_order_ = AFRONT_DEFAULT_POLYNOMIAL_ORDER;
+        polynomial_order_ = AFRONT_DEFAULT_POLYNOMIAL_ORDER;
       }
       else
       {
-        mls_order_ = order;
+        polynomial_order_ = order;
       }
 
-      int nr_coeff = (mls_order_ + 1) * (mls_order_ + 2) / 2;
+      int nr_coeff = (polynomial_order_ + 1) * (polynomial_order_ + 2) / 2;
       required_neighbors_ = 5 * nr_coeff;
     }
 
     /** @brief Get the mls polynomial order */
-    int getPolynomialOrder() const {return mls_order_;}
+    int getPolynomialOrder() const {return polynomial_order_;}
 
     /** @brief Set the boundary angle threshold used to determine if a point is on the boundary of the point cloud. */
     void setBoundaryAngleThreshold(const double angle)
@@ -416,12 +440,10 @@ namespace afront_meshing
     /**
      * @brief Get the maximum step required for a given point
      * @param p The point for which to determine the max step
+     * @param radius_found The radius at which the criteria was meet.
      * @return The max step required
      */
-    double getMaxStep(const Eigen::Vector3f &p) const;
-
-    /** @brief Get the curvature provided an index. */
-    float getCurvature(const int &index) const;
+    double getMaxStep(const Eigen::Vector3f &p, float &radius_found) const;
 
     /**
     * @brief Calculate triangle information.
@@ -429,7 +451,7 @@ namespace afront_meshing
     * @param p Third point of triangle
     * @return Returns information about the triangle: angles, edge lengths, etc.
     */
-    TriangleData getTriangleData(const FrontData &front, const pcl::PointXYZINormal p) const;
+    TriangleData getTriangleData(const FrontData &front, const AfrontVertexPointType &p) const;
 
     /** @brief Update the allowed triangle tolerances. */
     void updateTriangleTolerances()
@@ -466,7 +488,7 @@ namespace afront_meshing
     double rho_;           /**< @brief The angle of the osculating circle where a triangle edge should optimally subtend */
     double reduction_;     /**< @brief The allowed percent reduction from triangle to triangle. */
     double search_radius_; /**< @brief The search radius used by mls */
-    int mls_order_;        /**< @brief The degree of the polynomial used by mls */
+    int polynomial_order_; /**< @brief The degree of the polynomial used by mls */
     int threads_;          /**< @brief The number of threads to be used by mls */
 
     // Algorithm Data
@@ -479,15 +501,14 @@ namespace afront_meshing
 
     // Guidance field data
     MLSSampling mls_;
-    pcl::PointCloud<pcl::PointNormal>::Ptr mls_cloud_;
-    pcl::search::KdTree<pcl::PointNormal>::Ptr mls_cloud_tree_;
+    pcl::PointCloud<afront_meshing::AfrontGuidanceFieldPointType>::Ptr mls_cloud_;
+    pcl::search::KdTree<afront_meshing::AfrontGuidanceFieldPointType>::Ptr mls_cloud_tree_;
 
     // Generated data
     Mesh mesh_; /**< The mesh object for inserting faces/vertices */
     pcl::PointCloud<MeshTraits::VertexData>::Ptr mesh_vertex_data_ptr_;
     pcl::octree::OctreePointCloudSearch<MeshTraits::VertexData>::Ptr mesh_octree_;
     pcl::IndicesPtr mesh_vertex_data_indices_;
-
 
     // Algorithm Status Data
     std::deque<HalfEdgeIndex> queue_;

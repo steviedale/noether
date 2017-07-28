@@ -2,7 +2,7 @@
 
 namespace afront_meshing
 {
-  void MLSSampling::process(pcl::PointCloud<pcl::PointNormal> &output)
+  void MLSSampling::process(pcl::PointCloud<AfrontGuidanceFieldPointType> &output, const double rho)
   {
     MovingLeastSquares::process(output);
 
@@ -16,15 +16,18 @@ namespace afront_meshing
         k = MLS_MINIMUM_CURVATURE;
 
       output[i].curvature = k;
+      output[i].ideal_edge_length = 2.0 * std::sin(rho / 2.0) / k;
+
+      // Store min and max curvature
       if (k > max_curvature_)
         max_curvature_ = k;
 
       if (k < min_curvature_)
-        min_curvature_ = k;
+        min_curvature_ = k; 
     }
   }
 
-  pcl::PointXYZINormal MLSSampling::projectPointOrthogonalToMLSSurface(double u, double v, double w, const MLSResult &mls_result) const
+  AfrontVertexPointType MLSSampling::projectPointOrthogonalToMLSSurface(double u, double v, double w, const MLSResult &mls_result) const
   {
     // This was implemented based on this https://math.stackexchange.com/questions/1497093/shortest-distance-between-point-and-surface
 
@@ -79,7 +82,7 @@ namespace afront_meshing
       normal -= (d.z_u * mls_result.u_axis + d.z_v * mls_result.v_axis);
     }
 
-    pcl::PointXYZINormal result;
+    AfrontVertexPointType result;
     result.x = static_cast<float> (mls_result.mean[0] + mls_result.u_axis[0] * gu + mls_result.v_axis[0] * gv + mls_result.plane_normal[0] * gw);
     result.y = static_cast<float> (mls_result.mean[1] + mls_result.u_axis[1] * gu + mls_result.v_axis[1] * gv + mls_result.plane_normal[1] * gw);
     result.z = static_cast<float> (mls_result.mean[2] + mls_result.u_axis[2] * gu + mls_result.v_axis[2] * gv + mls_result.plane_normal[2] * gw);
@@ -128,7 +131,7 @@ namespace afront_meshing
     return result;
   }
 
-  MLSSampling::SamplePointResults MLSSampling::samplePoint(const pcl::PointNormal& pt) const
+  MLSSampling::SamplePointResults MLSSampling::samplePoint(const afront_meshing::AfrontGuidanceFieldPointType& pt) const
   {
     pcl::PointXYZ search_pt(pt.x, pt.y, pt.z);
     return samplePoint(search_pt);

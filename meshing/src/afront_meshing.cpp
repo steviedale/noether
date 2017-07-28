@@ -33,6 +33,7 @@ namespace afront_meshing
     PCL_INFO("Initializing Mesher (Size: %i)!\n", (int)cloud->points.size());
     input_cloud_ = cloud;
     input_cloud_tree_ = pcl::search::KdTree<pcl::PointXYZ>::Ptr(new pcl::search::KdTree<pcl::PointXYZ>);
+    input_cloud_tree_->setSortedResults(false);
     input_cloud_tree_->setInputCloud(input_cloud_);
   }
 
@@ -81,14 +82,14 @@ namespace afront_meshing
     //Show Final mesh results over the mls point cloud
     int v3 = 3;
     viewer_->createViewPort(0.0, 0.0, 0.5, 0.5, v3);
-    pcl::visualization::PointCloudColorHandlerGenericField<pcl::PointNormal> handler_k(mls_cloud_, "curvature");
-    viewer_->addPointCloud<pcl::PointNormal>(mls_cloud_, handler_k, "mls_cloud", v3);
+    pcl::visualization::PointCloudColorHandlerGenericField<AfrontGuidanceFieldPointType> handler_k(mls_cloud_, "curvature");
+    viewer_->addPointCloud<AfrontGuidanceFieldPointType>(mls_cloud_, handler_k, "mls_cloud", v3);
 
     //Show mls information
     int v4 = 4;
     viewer_->createViewPort(0.5, 0.0, 1.0, 0.5, v4);
-    pcl::visualization::PointCloudColorHandlerCustom<pcl::PointNormal> single_color2(mls_cloud_, 0, 255, 0);
-    viewer_->addPointCloud<pcl::PointNormal>(mls_cloud_, single_color2, "mls_cloud2", v4);
+    pcl::visualization::PointCloudColorHandlerCustom<AfrontGuidanceFieldPointType> single_color2(mls_cloud_, 0, 255, 0);
+    viewer_->addPointCloud<AfrontGuidanceFieldPointType>(mls_cloud_, single_color2, "mls_cloud2", v4);
 
     viewer_->registerKeyboardCallback(&AfrontMeshing::keyboardEventOccurred, *this);
     viewer_->spin();
@@ -103,27 +104,27 @@ namespace afront_meshing
     auto start = std::chrono::high_resolution_clock::now();
 
     // Calculate MLS
-    mls_cloud_ = pcl::PointCloud<pcl::PointNormal>::Ptr(new pcl::PointCloud<pcl::PointNormal>());
+    mls_cloud_ = pcl::PointCloud<afront_meshing::AfrontGuidanceFieldPointType>::Ptr(new pcl::PointCloud<afront_meshing::AfrontGuidanceFieldPointType>());
 
     //pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal> mls;
     mls_.setNumberOfThreads(threads_);
     mls_.setComputeNormals(true);
     mls_.setInputCloud(input_cloud_);
     mls_.setPolynomialFit(true);
-    mls_.setPolynomialOrder(mls_order_);
+    mls_.setPolynomialOrder(polynomial_order_);
     mls_.setSearchMethod(input_cloud_tree_);
     mls_.setSearchRadius(search_radius_);
 
     // Adding the Distinct cloud is to force the storing of the mls results.
-    mls_.setUpsamplingMethod(pcl::MovingLeastSquares<pcl::PointXYZ, pcl::PointNormal>::DISTINCT_CLOUD);
+    mls_.setUpsamplingMethod(pcl::MovingLeastSquares<pcl::PointXYZ, afront_meshing::AfrontGuidanceFieldPointType>::DISTINCT_CLOUD);
     mls_.setDistinctCloud(input_cloud_);
 
-    mls_.process(*mls_cloud_);
+    mls_.process(*mls_cloud_, rho_);
     if (mls_cloud_->empty())
       return false;
 
-    mls_cloud_tree_ = pcl::search::KdTree<pcl::PointNormal>::Ptr(new pcl::search::KdTree<pcl::PointNormal>);
-    mls_cloud_tree_->setSortedResults(true);
+    mls_cloud_tree_ = pcl::search::KdTree<afront_meshing::AfrontGuidanceFieldPointType>::Ptr(new pcl::search::KdTree<afront_meshing::AfrontGuidanceFieldPointType>());
+    mls_cloud_tree_->setSortedResults(true); // Need to figure out how to use unsorted. Must rewrite getMaxStep.
     mls_cloud_tree_->setInputCloud(mls_cloud_);
 
     std::chrono::duration<double> elapsed = std::chrono::high_resolution_clock::now() - start;
@@ -222,11 +223,10 @@ namespace afront_meshing
     viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "NextHalfEdge", 1);
     viewer_->setShapeRenderingProperties(pcl::visualization::PCL_VISUALIZER_LINE_WIDTH, 8, "PrevHalfEdge", 1);
 
-
     pcl::visualization::PointCloudColorHandlerCustom<MeshTraits::VertexData> single_color(mesh_vertex_data_ptr_, 255, 128, 0);
     viewer_->addPointCloud<MeshTraits::VertexData>(mesh_vertex_data_ptr_, single_color, "Mesh_Vertex_Cloud", 2);
 
-    viewer_->addPointCloudNormals<pcl::PointXYZINormal>(mesh_vertex_data_ptr_, 1, 0.005, "Mesh_Vertex_Cloud_Normals", 4);
+    viewer_->addPointCloudNormals<MeshTraits::VertexData>(mesh_vertex_data_ptr_, 1, 0.005, "Mesh_Vertex_Cloud_Normals", 4);
     #endif
 
     if (mesh_.getOppositeFaceIndex(afront.next.secondary) != mesh_.getOppositeFaceIndex(afront.prev.secondary) && afront.next.vi[2] == afront.prev.vi[2]) // This indicates a closed area
@@ -371,7 +371,7 @@ namespace afront_meshing
     std::vector<int> K;
     std::vector<float> K_dist;
 
-    pcl::PointNormal middle_pt;
+    afront_meshing::AfrontGuidanceFieldPointType middle_pt;
     middle_pt.x = x;
     middle_pt.y = y;
     middle_pt.z = z;
@@ -385,15 +385,16 @@ namespace afront_meshing
     Eigen::Vector3f p1 = sp1.point.getVector3fMap();
 
     // Get the allowed grow distance and control the first triangle size
-    sp1.point.intensity = getMaxStep(p1);
+    sp1.point.max_step_search_radius = search_radius_;
+    sp1.point.max_step = getMaxStep(p1, sp1.point.max_step_search_radius);
 
     // search for the nearest neighbor
     std::vector<int> K;
     std::vector<float> K_dist;
-    mls_cloud_tree_->nearestKSearch(utils::convertPointXYZINormalToPointNormal(sp1.point), 2, K, K_dist);
+    mls_cloud_tree_->nearestKSearch(utils::convertAfrontPointTypeToAfrontGuidanceFieldPointType(sp1.point, rho_), 2, K, K_dist);
 
     // use l1 and nearest neighbor to extend edge
-    pcl::PointNormal dp;
+    AfrontGuidanceFieldPointType dp;
     MLSSampling::SamplePointResults sp2, sp3;
     Eigen::Vector3f p2, p3, v1, v2, mp, norm, proj;
 
@@ -402,10 +403,11 @@ namespace afront_meshing
     v1 = v1.normalized();
     norm = dp.getNormalVector3fMap();
 
-    proj = p1 + sp1.point.intensity * v1;
+    proj = p1 + sp1.point.max_step * v1;
     sp2 = mls_.samplePoint(pcl::PointXYZ(proj(0), proj(1), proj(2)));
     p2 = sp2.point.getVector3fMap();
-    sp2.point.intensity = getMaxStep(p2);
+    sp2.point.max_step_search_radius = sp1.point.max_step_search_radius + sp1.point.max_step;
+    sp2.point.max_step = getMaxStep(p2, sp2.point.max_step_search_radius);
 
     mp = utils::getMidPoint(p1, p2);
     double d = utils::distPoint2Point(p1, p2);
@@ -413,12 +415,13 @@ namespace afront_meshing
 
     v2 = norm.cross(v1).normalized();
 
-    double max_step = std::min(sp1.point.intensity, sp2.point.intensity);
+    double max_step = std::min(sp1.point.max_step, sp2.point.max_step);
     double l = std::sqrt(pow(max_step, 2.0) - pow(d / 2.0, 2.0)); // Calculate the height of the triangle
     proj = mp + l * v2;
     sp3 = mls_.samplePoint(pcl::PointXYZ(proj(0), proj(1), proj(2)));
     p3 = sp3.point.getVector3fMap();
-    sp3.point.intensity = getMaxStep(p3);
+    sp3.point.max_step_search_radius = std::max(sp1.point.max_step_search_radius, sp2.point.max_step_search_radius) + max_step;
+    sp3.point.max_step = getMaxStep(p3, sp3.point.max_step_search_radius);
 
     d = utils::distPoint2Point(p1, p3);
     if (d > max_edge_length_)
@@ -493,7 +496,7 @@ namespace afront_meshing
     result.front.vi[0] = mesh_.getOriginatingVertexIndex(half_edge);
     result.front.vi[1] = mesh_.getTerminatingVertexIndex(half_edge);
 
-    pcl::PointXYZINormal p1, p2;
+    MeshTraits::VertexData p1, p2;
     p1 = mesh_vertex_data_ptr_->at(result.front.vi[0].get());
     p2 = mesh_vertex_data_ptr_->at(result.front.vi[1].get());
 
@@ -512,7 +515,10 @@ namespace afront_meshing
     result.front.d = getGrowDirection(result.front.p[0], result.front.mp, fd);
 
     // Get the maximum grow distance
-    result.front.max_step = std::min(p1.intensity, p2.intensity);
+    result.front.max_step = std::min(p1.max_step, p2.max_step);
+
+    // Get the approximate search radius for the calculating the max step for the grow operation.
+    result.front.max_step_search_radius = std::max(p1.max_step_search_radius, p2.max_step_search_radius) + result.front.max_step;
 
     // Check Next Half Edge
     result.next = getNextHalfEdge(result.front);
@@ -693,7 +699,7 @@ namespace afront_meshing
 
       if (mesh_.isBoundary(vi))
       {
-        pcl::PointXYZINormal chkpn = mesh_vertex_data_ptr_->at(vi.get());
+        MeshTraits::VertexData chkpn = mesh_vertex_data_ptr_->at(vi.get());
         Eigen::Vector3f chkpt = chkpn.getVector3fMap();
         bool chkpt_valid = isPointValid(pvr.afront.front, chkpt);
 
@@ -1225,7 +1231,7 @@ namespace afront_meshing
 
   bool AfrontMeshing::isBoundaryPoint(const int index) const
   {
-    pcl::PointNormal closest = mls_cloud_->at(index);
+    AfrontGuidanceFieldPointType closest = mls_cloud_->at(index);
 
     Eigen::Vector4f u;
     Eigen::Vector4f v;
@@ -1290,7 +1296,7 @@ namespace afront_meshing
 
   bool AfrontMeshing::nearBoundary(const FrontData &front, const int index) const
   {
-    pcl::PointNormal closest = mls_cloud_->at(index);
+    AfrontGuidanceFieldPointType closest = mls_cloud_->at(index);
 
     Eigen::Vector3f v1 = (front.p[1] - front.mp).normalized();
     Eigen::Vector3f v2 = closest.getVector3fMap() - front.mp;
@@ -1310,8 +1316,9 @@ namespace afront_meshing
   {
     // Add new face
     MeshTraits::FaceData new_fd = createFaceData(pvr.tri);
-    pcl::PointXYZINormal p = pvr.pv.point;
-    p.intensity = getMaxStep(pvr.tri.p[2]);
+    MeshTraits::VertexData p = pvr.pv.point;
+    p.max_step_search_radius = pvr.afront.front.max_step_search_radius;
+    p.max_step = getMaxStep(pvr.tri.p[2], p.max_step_search_radius);
     FaceIndex fi = mesh_.addFace(pvr.afront.front.vi[0], pvr.afront.front.vi[1], mesh_.addVertex(p), new_fd);
     mesh_octree_->addPointFromCloud(mesh_vertex_data_ptr_->size() - 1, mesh_vertex_data_indices_);
 
@@ -1362,14 +1369,6 @@ namespace afront_meshing
 
   }
 
-  float AfrontMeshing::getCurvature(const int &index) const
-  {
-    if(index >= mls_cloud_->points.size())
-      return -1.0;
-
-    return mls_cloud_->at(index).curvature;
-  }
-
   Eigen::Vector3f AfrontMeshing::getGrowDirection(const Eigen::Vector3f &p, const Eigen::Vector3f &mp, const MeshTraits::FaceData &fd) const
   {
     Eigen::Vector3f v1, v2, v3, norm;
@@ -1385,9 +1384,9 @@ namespace afront_meshing
     return v2;
   }
 
-  double AfrontMeshing::getMaxStep(const Eigen::Vector3f &p) const
+  double AfrontMeshing::getMaxStep(const Eigen::Vector3f &p, float &radius_found) const
   {
-    pcl::PointNormal pn;
+    AfrontGuidanceFieldPointType pn;
     std::vector<int> k;
     std::vector<float> k_dist;
     pn.x = p(0);
@@ -1397,28 +1396,35 @@ namespace afront_meshing
     // What is shown in the afront paper. Need to figure out how to transverse the kdtree.
     double len = std::numeric_limits<double>::max();
     double radius = 0;
-    int j = 0;
+    int j = 1;
     int pcnt = 0;
     bool finished = false;
+    double search_radius = search_radius_;
+
+    // This is to provide the ability to seed the search
+    if (radius_found > 0)
+    {
+      search_radius = radius_found;
+    }
+
     while (pcnt < (mls_cloud_->points.size() - 1))
     {
-      int cnt = mls_cloud_tree_->radiusSearch(pn, (j + 1) * search_radius_, k, k_dist);
+      int cnt = mls_cloud_tree_->radiusSearch(pn, j * search_radius, k, k_dist);
       for(int i = pcnt; i < cnt; ++i)
       {
         int neighbors = mls_.getMLSResult(i).num_neighbors;
         if (neighbors < required_neighbors_)
           continue;
 
-        float curvature = getCurvature(k[i]);
-        double ideal = 2.0 * std::sin(rho_ / 2.0) / curvature;
-
+        AfrontGuidanceFieldPointType &gp = mls_cloud_->at(k[i]);
         radius = sqrt(k_dist[i]);
 
-        double step_required = (1.0 - reduction_) * radius + reduction_ * ideal;
+        double step_required = (1.0 - reduction_) * radius + reduction_ * gp.ideal_edge_length;
         len = std::min(len, step_required);
 
         if (radius >= (len/ (1.0 - reduction_)))
         {
+          radius_found = radius;
           finished = true;
           break;
         }
@@ -1435,13 +1441,13 @@ namespace afront_meshing
 
     if (!finished)
     {
-      PCL_ERROR("Warning Max Step Not Found! Length: %f\n", len);
+      PCL_WARN("Warning Max Step Not Found! Length: %f\n", len);
     }
 
     return len;
   }
 
-  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const pcl::PointXYZINormal p) const
+  AfrontMeshing::TriangleData AfrontMeshing::getTriangleData(const FrontData &front, const AfrontVertexPointType &p) const
   {
     TriangleData result;
     Eigen::Vector3f v1, v2, v3, cross;
