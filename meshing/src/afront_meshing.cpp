@@ -139,9 +139,9 @@ namespace afront_meshing
     return out_mesh;
   }
 
-  pcl::PointCloud<pcl::Normal>::ConstPtr AfrontMeshing::getMeshVertexNormals() const
+  pcl::PointCloud<pcl::PointNormal>::ConstPtr AfrontMeshing::getMeshVertexNormals() const
   {
-    pcl::PointCloud<pcl::Normal>::Ptr pn(new pcl::PointCloud<pcl::Normal>());;
+    pcl::PointCloud<pcl::PointNormal>::Ptr pn(new pcl::PointCloud<pcl::PointNormal>());;
     pcl::copyPointCloud(*mesh_vertex_data_ptr_, *pn);
 
     return pn;
@@ -1695,5 +1695,151 @@ namespace afront_meshing
     }
   }
 #endif
+
+  bool AfrontMeshing::setNormalsFromViewPoint(const Eigen::Vector3f& view_pt,
+                                              const Eigen::Vector3f& view_norm,
+                                              pcl::PolygonMesh& output_mesh) const
+  {
+    // Check member variables to ensure meshing has occurred and is finished
+    if(!initialized_)
+    {
+      PCL_ERROR("Afront meshing class not initialized!\n");
+      return false;
+    }
+    if(!finished_)
+    {
+      PCL_ERROR("Afront meshing operation has not been completed!\n");
+      return false;
+    }
+    if(!mesh_octree_ || !mesh_vertex_data_ptr_)
+    {
+      PCL_ERROR("Mesh octree search and/or mesh vertex data object not initialized!\n");
+      return false;
+    }
+
+    // Find the vertex on the mesh nearest to where the view ray intersects the mesh
+    MeshTraits::VertexData search_pt;
+    if(!getVertexFromViewpoint(view_pt, view_norm, search_pt))
+    {
+      return false;
+    }
+
+    // Check the view normal with the normal of vertex found in the mesh
+    Eigen::Vector3f search_pt_norm (search_pt.normal_x, search_pt.normal_y, search_pt.normal_z);
+    search_pt_norm.normalize();
+    double dp = view_norm.dot(search_pt_norm);
+    PCL_DEBUG("Dot product between view normal and point normal is %f\n", dp);
+
+    if(dp < 0)
+    {
+      PCL_INFO("View point normal opposes nearest neighbor normal; no normal reorientation needed\n");
+      output_mesh = getMesh();
+    }
+    else
+    {
+      PCL_INFO("View point normal aligned with nearest neighbor normal; reorienting normals...\n");
+
+      // Update the normals of the generated mesh
+      Mesh mesh (mesh_);
+      pcl::PointCloud<MeshTraits::VertexData>& vertex_data = mesh.getVertexDataCloud();
+
+      for(auto it = vertex_data.points.begin(); it != vertex_data.points.end(); ++it)
+      {
+        it->normal_x *= -1;
+        it->normal_y *= -1;
+        it->normal_z *= -1;
+      }
+
+      // Generate mesh faces with opposite normals by adding vertices in reverse
+      toFaceVertexMeshReverse(mesh, output_mesh);
+    }
+
+    return true;
+  }
+
+  bool AfrontMeshing::getVertexFromViewpoint(const Eigen::Vector3f& view_pt,
+                                             const Eigen::Vector3f& view_norm,
+                                             MeshTraits::VertexData& vertex) const
+  {
+    // Find all vertices along the view normal ray; select the point closest to the view point
+    std::vector<int> vertex_indices;
+
+    // 1. Attempt to intersect voxel(s) containing mesh vertices along view normal
+    if(mesh_octree_->getIntersectedVoxelIndices(view_pt, view_norm, vertex_indices) > 0)
+    {
+      PCL_DEBUG("Voxel containing a vertex identified from mesh\n");
+    }
+    // 2. Attempt to intersect voxel(s) containing point(s) in the input point cloud along the view normal
+    else
+    {
+      pcl::octree::OctreePointCloudSearch<pcl::PointXYZ> octree (search_radius_);
+      octree.setInputCloud(input_cloud_);
+      octree.addPointsFromInputCloud();
+
+      std::vector<int> point_indices;
+      if(octree.getIntersectedVoxelIndices(view_pt, view_norm, point_indices) > 0)
+      {
+        MeshTraits::VertexData vertex_search_pt;
+        pcl::copyPoint<pcl::PointXYZ, MeshTraits::VertexData>(input_cloud_->points[point_indices.front()], vertex_search_pt);
+
+        std::vector<float> sqr_dists;
+        vertex_indices.clear();
+        if(mesh_octree_->nearestKSearch(vertex_search_pt, 5, vertex_indices, sqr_dists) > 0)
+        {
+          PCL_DEBUG("Voxel containing a vertex identified from input point cloud\n");
+        }
+        else
+        {
+          PCL_ERROR("No nearest neighbor in the mesh can be found for the identified input cloud point\n");
+          return false;
+        }
+      }
+      else
+      {
+        PCL_ERROR("The view ray does not intersect any voxels in the input cloud octree\n");
+        return false;
+      }
+    }
+
+    // Iterate over all vertex indices found in the intersected voxel(s)
+    double sqr_dist = std::numeric_limits<double>::max();
+
+    for(auto idx = vertex_indices.begin(); idx != vertex_indices.end(); ++idx)
+    {
+      MeshTraits::VertexData pt = mesh_octree_->getInputCloud()->points[*idx];
+      double dist2 = std::pow((pt.x - view_pt[0]), 2) + std::pow((pt.y - view_pt[1]), 2) + std::pow((pt.z - view_pt[2]), 2);
+      if(dist2 < sqr_dist)
+      {
+        sqr_dist = dist2;
+        vertex = pt;
+      }
+    }
+    PCL_DEBUG("Mesh normal evaluation point: xyz = {%f, %f, %f} normal = {%f, %f, %f}\n",
+              vertex.x, vertex.y, vertex.z, vertex.normal_x, vertex.normal_y ,vertex.normal_z);
+
+    return true;
+  }
+
+  void AfrontMeshing::toFaceVertexMeshReverse(const Mesh& mesh,
+                                              pcl::PolygonMesh& face_vertex_mesh) const
+  {
+    // Generate mesh faces with opposite normals by adding vertices in reverse
+    pcl::Vertices polygon;
+    pcl::toPCLPointCloud2 (mesh.getVertexDataCloud(), face_vertex_mesh.cloud);
+
+    face_vertex_mesh.polygons.reserve (mesh.sizeFaces ());
+    for (size_t i=0; i<mesh.sizeFaces (); ++i)
+    {
+      VAFC circ = mesh.getVertexAroundFaceCirculator (FaceIndex (i));
+      const VAFC circ_end = circ;
+      polygon.vertices.clear ();
+      do
+      {
+        polygon.vertices.push_back (circ.getTargetIndex ().get ());
+      } while (--circ != circ_end);
+      face_vertex_mesh.polygons.push_back (polygon);
+    }
+  }
+
 }
 

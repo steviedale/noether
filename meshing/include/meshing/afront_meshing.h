@@ -206,7 +206,7 @@ namespace afront_meshing
     pcl::PolygonMesh getMesh() const;
 
     /** @brief Get the mesh vertex normals */
-    pcl::PointCloud<pcl::Normal>::ConstPtr getMeshVertexNormals() const;
+    pcl::PointCloud<pcl::PointNormal>::ConstPtr getMeshVertexNormals() const;
 
     #ifdef AFRONTDEBUG
     /**  @brief Get the internal viewer */
@@ -387,6 +387,18 @@ namespace afront_meshing
     /** @brief Print a given face's information */
     void printFace(const FaceIndex &idx_face) const;
 
+    /**
+     * @brief setNormalsFromViewPoint utilizes a view point to modify the normals of the input mesh such that the view point normal
+     * and mesh normals are facing each other
+     * @param view_pt view point projected onto or near the generated mesh
+     * @param view_norm view point normal (should be facing the mesh)
+     * @param output_mesh the resulting mesh after face and vertex normal realignment
+     * @return true on success; false on failure
+     */
+    bool setNormalsFromViewPoint(const Eigen::Vector3f& view_pt,
+                                 const Eigen::Vector3f& view_norm,
+                                 pcl::PolygonMesh& output_mesh) const;
+
   private:
     /** @brief Used to get the next half edge */
     CutEarData getNextHalfEdge(const FrontData &front) const;
@@ -471,6 +483,25 @@ namespace afront_meshing
 
     /** @brief Generate a plygon mesh that represent the mls polynomial surface. */
     pcl::PolygonMesh getPolynomialSurface(const PredictVertexResults &pvr, const double step) const;
+
+    /**
+     * @brief getVertexFromViewpoint finds a vertex on the mesh nearest to where the view normal intersects the mesh
+     * @param view_pt origin of the view point
+     * @param view_norm view direction vector
+     * @param vertex output closest vertex to view vector
+     * @return true on success; false on failure
+     */
+    bool getVertexFromViewpoint(const Eigen::Vector3f& view_pt,
+                                const Eigen::Vector3f& view_norm,
+                                MeshTraits::VertexData& vertex) const;
+
+    /**
+     * @brief toFaceVertexMeshReverse creates a mesh with the face normals generated following the left-hand rule
+     * @param mesh input half-edge mesh
+     * @param face_vertex_mesh ouput polygon mesh
+     */
+    void toFaceVertexMeshReverse(const Mesh& mesh,
+                                 pcl::PolygonMesh& face_vertex_mesh) const;
 
     #ifdef AFRONTDEBUG
     /**

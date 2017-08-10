@@ -10,7 +10,7 @@ else()
 endif()
 
 # Enable Afront Debug Information
-add_definitions(-DAFRONTDEBUG)
+#add_definitions(-DAFRONTDEBUG)
 
 find_package(catkin REQUIRED cmake_modules roscpp)
 

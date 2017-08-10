@@ -19,6 +19,8 @@ int main(int argc, char **argv)
   int threads;
   std::string extension;
 
+  pcl::console::setVerbosityLevel(pcl::console::L_DEBUG);
+
   if (nh.hasParam("input_file"))
   {
     nh.param<std::string>("input_file", input_file, "");
@@ -69,8 +71,15 @@ int main(int argc, char **argv)
 
   std::vector<int> indices;
   pcl::removeNaNFromPointCloud(cloud, filtered_cloud, indices);
-
   pcl::PointCloud<pcl::PointXYZ>::Ptr in_cloud(new pcl::PointCloud<pcl::PointXYZ>(filtered_cloud));
+
+  Eigen::Vector4f centroid;
+  pcl::compute3DCentroid(*in_cloud, centroid);
+  Eigen::Vector3f view_pt (0.0f, 0.0f, 0.0f);
+  Eigen::Vector3f view_norm (centroid.head<3>());
+  view_norm.normalize();
+  ROS_DEBUG_STREAM("View Normal: " << view_norm);
+
   mesher.setRho(rho);
   mesher.setReduction(reduction);
   mesher.setSearchRadius(radius);
@@ -87,11 +96,21 @@ int main(int argc, char **argv)
       for (auto i = 0; i < sample; ++i)
         mesher.stepReconstruction();
 
-    pcl::io::savePLYFile(output_file, mesher.getMesh());
+    pcl::PolygonMesh mesh = mesher.getMesh();
+
+    if(!mesher.setNormalsFromViewPoint(view_pt, view_norm, mesh))
+    {
+      ROS_WARN("Failed to set mesh normals from given viewpoint (origin to cloud centroid)");
+    }
+    else
+    {
+      pcl::io::savePLYFile(output_file, mesh);
+    }
   }
   else
   {
     ROS_ERROR("Failed to initialize AFront Mesher!");
+    return -1;
   }
 
   return 0;
