@@ -31,7 +31,7 @@
 #include <deque>
 #include <meshing/mls_sampling.h>
 #include <meshing/afront_utils.h>
-
+#include <boost/optional.hpp>
 
 namespace afront_meshing
 {
@@ -393,11 +393,19 @@ namespace afront_meshing
      * @param view_pt view point projected onto or near the generated mesh
      * @param view_norm view point normal (should be facing the mesh)
      * @param output_mesh the resulting mesh after face and vertex normal realignment
-     * @return true on success; false on failure
+     * @return true on success (boolean in optional indicates if normals were flipped); false on failure
      */
-    bool setNormalsFromViewPoint(const Eigen::Vector3f& view_pt,
-                                 const Eigen::Vector3f& view_norm,
-                                 pcl::PolygonMesh& output_mesh) const;
+    boost::optional<bool> setNormalsFromViewPoint(const Eigen::Vector3f& view_pt,
+                                                  const Eigen::Vector3f& view_norm,
+                                                  pcl::PolygonMesh& output_mesh) const;
+
+    /**
+     * @brief deleteVertex Exposes deleteVertex function in internal half-edge mesh object
+     * @param v_idx Index to the vertex to be deleted
+     */
+    void getInsetMesh(const std::vector<VertexIndex>& indices,
+                      const bool flip_normals,
+                      pcl::PolygonMesh& inset_mesh) const;
 
   private:
     /** @brief Used to get the next half edge */

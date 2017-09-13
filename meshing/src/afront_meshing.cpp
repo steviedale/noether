@@ -1696,20 +1696,22 @@ namespace afront_meshing
   }
 #endif
 
-  bool AfrontMeshing::setNormalsFromViewPoint(const Eigen::Vector3f& view_pt,
+  boost::optional<bool> AfrontMeshing::setNormalsFromViewPoint(const Eigen::Vector3f& view_pt,
                                               const Eigen::Vector3f& view_norm,
                                               pcl::PolygonMesh& output_mesh) const
   {
+    boost::optional<bool> flip_normals = false;
+
     // Check member variables to ensure meshing has occurred and is finished
     if(!initialized_)
     {
       PCL_ERROR("Afront meshing class not initialized!\n");
-      return false;
+      return {};
     }
     if(!finished_)
     {
       PCL_ERROR("Afront meshing operation has not been completed!\n");
-      return false;
+      return {};
     }
     if(!mesh_octree_ || !mesh_vertex_data_ptr_)
     {
@@ -1721,7 +1723,7 @@ namespace afront_meshing
     MeshTraits::VertexData search_pt;
     if(!getVertexFromViewpoint(view_pt, view_norm, search_pt))
     {
-      return false;
+      return {};
     }
 
     // Check the view normal with the normal of vertex found in the mesh
@@ -1738,6 +1740,7 @@ namespace afront_meshing
     else
     {
       PCL_INFO("View point normal aligned with nearest neighbor normal; reorienting normals...\n");
+      flip_normals = true;
 
       // Update the normals of the generated mesh
       Mesh mesh (mesh_);
@@ -1754,7 +1757,7 @@ namespace afront_meshing
       toFaceVertexMeshReverse(mesh, output_mesh);
     }
 
-    return true;
+    return {flip_normals};
   }
 
   bool AfrontMeshing::getVertexFromViewpoint(const Eigen::Vector3f& view_pt,
@@ -1772,7 +1775,7 @@ namespace afront_meshing
     // 2. Attempt to intersect voxel(s) containing point(s) in the input point cloud along the view normal
     else
     {
-      pcl::octree::OctreePointCloudSearch<pcl::PointXYZ> octree (search_radius_);
+      pcl::octree::OctreePointCloudSearch<pcl::PointXYZ> octree (2.0*search_radius_);
       octree.setInputCloud(input_cloud_);
       octree.addPointsFromInputCloud();
 
@@ -1838,6 +1841,27 @@ namespace afront_meshing
         polygon.vertices.push_back (circ.getTargetIndex ().get ());
       } while (--circ != circ_end);
       face_vertex_mesh.polygons.push_back (polygon);
+    }
+  }
+
+  void AfrontMeshing::getInsetMesh(const std::vector<VertexIndex>& indices,
+                                   const bool flip_normals,
+                                   pcl::PolygonMesh& inset_mesh) const
+  {
+    Mesh mesh (mesh_);
+    for(const auto& idx : indices)
+    {
+      mesh.deleteVertex(idx);
+    }
+    mesh.cleanUp();
+
+    if(flip_normals)
+    {
+      toFaceVertexMeshReverse(mesh, inset_mesh);
+    }
+    else
+    {
+      pcl::geometry::toFaceVertexMesh(mesh, inset_mesh);
     }
   }
 
