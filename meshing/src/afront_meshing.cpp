@@ -1857,10 +1857,21 @@ namespace afront_meshing
 
     if(flip_normals)
     {
+      // Flip the vertex normals
+      pcl::PointCloud<MeshTraits::VertexData>& vertex_data = mesh.getVertexDataCloud();
+      for(auto it = vertex_data.points.begin(); it != vertex_data.points.end(); ++it)
+      {
+        it->normal_x *= -1;
+        it->normal_y *= -1;
+        it->normal_z *= -1;
+      }
+
+      // Generate the faces in reverse so that the face normal is flipped
       toFaceVertexMeshReverse(mesh, inset_mesh);
     }
     else
     {
+      // Generate the faces normally (according to right hand rule)
       pcl::geometry::toFaceVertexMesh(mesh, inset_mesh);
     }
   }
