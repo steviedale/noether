@@ -40,6 +40,7 @@ namespace afront_meshing
   const int    AFRONT_DEFAULT_THREADS = 1;
   const int    AFRONT_DEFAULT_POLYNOMIAL_ORDER = 2;
   const double AFRONT_DEFAULT_BOUNDARY_ANGLE_THRESHOLD = M_PI_2;
+  const double AFRONT_DEFAULT_MAX_ALLOWED_EDGE_LENGTH = std::numeric_limits<double>::max();
 
   const double AFRONT_ASPECT_RATIO_TOLERANCE = 0.85;
   const double AFRONT_CLOSE_PROXIMITY_FACTOR = 0.5;
@@ -231,6 +232,24 @@ namespace afront_meshing
 
       hausdorff_error_ = (1.0 - sqrt((1.0 + 2.0 * cos(rho_)) / 3.0)) * (1.0 / (2.0 * sin(rho_ / 2)));
       updateTriangleTolerances();
+    }
+
+    double getMaxAllowedEdgeLength() const
+    {
+      return max_allowed_edge_length_;
+    }
+
+    void setMaxAllowedEdgeLength(const double length)
+    {
+      if (length <= 0.0)
+      {
+        PCL_ERROR("AFront max allowed triangle edge length must be greater than 0. Using default value.\n");
+        max_allowed_edge_length_ = AFRONT_DEFAULT_MAX_ALLOWED_EDGE_LENGTH;
+      }
+      else
+      {
+        max_allowed_edge_length_ = length;
+      }
     }
 
     /** @brief Get the primary variable used to control mesh triangulation size */
@@ -529,6 +548,7 @@ namespace afront_meshing
     double search_radius_; /**< @brief The search radius used by mls */
     int polynomial_order_; /**< @brief The degree of the polynomial used by mls */
     int threads_;          /**< @brief The number of threads to be used by mls */
+    double max_allowed_edge_length_;
 
     // Algorithm Data
     double hausdorff_error_;
