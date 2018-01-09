@@ -26,6 +26,7 @@ namespace afront_meshing
     setNumberOfThreads(AFRONT_DEFAULT_THREADS);
     setPolynomialOrder(AFRONT_DEFAULT_POLYNOMIAL_ORDER);
     setBoundaryAngleThreshold(AFRONT_DEFAULT_BOUNDARY_ANGLE_THRESHOLD);
+    setMaxAllowedEdgeLength(AFRONT_DEFAULT_MAX_ALLOWED_EDGE_LENGTH);
   }
 
   void AfrontMeshing::setInputCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud)
@@ -1394,7 +1395,7 @@ namespace afront_meshing
     pn.z = p(2);
 
     // What is shown in the afront paper. Need to figure out how to transverse the kdtree.
-    double len = std::numeric_limits<double>::max();
+    double len = max_allowed_edge_length_;
     double radius = 0;
     int j = 1;
     int pcnt = 0;
