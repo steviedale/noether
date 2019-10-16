@@ -22,7 +22,7 @@ namespace filters
  * @details: Smoothes a mesh by fitting a bspline surface to it.  The details of this implementation'
  * can be in found in http://pointclouds.org/documentation/tutorials/bspline_fitting.php
  */
-class BSplineReconstruction : public MeshFilterBase
+class BSplineReconstruction : public FilterBase<pcl::PolygonMesh>
 {
 public:
 

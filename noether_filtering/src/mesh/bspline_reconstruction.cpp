@@ -9,10 +9,10 @@
 #include "noether_filtering/utils.h"
 #include <XmlRpcException.h>
 #include <pcl/io/vtk_lib_io.h>
-#include <pluginlib/class_list_macros.h>
+//#include <pluginlib/class_list_macros.h>
 #include <boost/make_shared.hpp>
 
-PLUGINLIB_EXPORT_CLASS(noether_filtering::filters::BSplineReconstruction, noether_filtering:: MeshFilterBase)
+//PLUGINLIB_EXPORT_CLASS(noether_filtering::filters::BSplineReconstruction, noether_filtering:: MeshFilterBase)
 
 namespace noether_filtering
 {

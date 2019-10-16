@@ -4,24 +4,30 @@
  *  Created on: Oct 14, 2019
  *      Author: jrgnicho
  */
-
-#ifndef INCLUDE_NOETHER_FILTERING_FILTER_GROUP_HPP_
-#define INCLUDE_NOETHER_FILTERING_FILTER_GROUP_HPP_
+#ifndef INCLUDE_NOETHER_FILTERING_FILTER_MANAGER_H_
+#define INCLUDE_NOETHER_FILTERING_FILTER_MANAGER_H_
 
 #include <string>
 #include <memory>
-#include <pluginlib/class_loader.h>
+#include <class_loader/class_loader.h>
+#include <class_loader/multi_library_class_loader.h>
 #include <XmlRpcValue.h>
+#include "noether_filtering/filter_base.h"
+
 
 namespace noether_filtering
 {
+
+/**
+ * @brief The FilterManager class
+ */
 template<class F>
-class FilterGroup
+class FilterManager
 {
 public:
-  FilterGroup();
-  virtual ~FilterGroup();
-  
+  FilterManager();
+  virtual ~FilterManager() = default;
+
     /**
    * @details Initializes the filter chain and loads all the filter plugins from a yaml structured parameter
    * The parameter must conform to the following syntax:
@@ -52,14 +58,17 @@ public:
   bool applyFilters(const std::vector<std::string>& filters, const F& input, F& output, std::string& err_msg);
 
 protected:
-  std::shared_ptr< typename pluginlib::ClassLoader<F> > filter_loader_;
+//  class_loader::ClassLoader filter_loader_;
+  class_loader::MultiLibraryClassLoader filter_loader_;
   std::vector<std::string> filters_loaded_;
-  std::map<std::string, std::unique_ptr<F> > filters_map_;
-  bool continue_on_failure_;
 
+  typedef typename class_loader::ClassLoader::UniquePtr<FilterBase<F>> FilterBasePtr;
+  std::map<std::string, FilterBasePtr> filters_map_;
+
+  bool continue_on_failure_;
 };
 
 } /* namespace noether_filtering */
 
 
-#endif /* INCLUDE_NOETHER_FILTERING_FILTER_GROUP_HPP_ */
+#endif /* INCLUDE_NOETHER_FILTERING_FILTER_MANAGER_H_ */
