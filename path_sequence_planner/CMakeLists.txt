@@ -37,3 +37,17 @@ target_link_libraries(simple_path_sequence_planner-test
     ${VTK_LIBRARIES}
 )
 
+#############
+## Install ##
+#############
+install(
+  DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
+
+install(
+  TARGETS 
+    simple_path_sequence_planner
+  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)

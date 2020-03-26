@@ -42,3 +42,18 @@ target_link_libraries(noether_conversions
     ${catkin_LIBRARIES}
     ${VTK_LIBRARIES}
 )
+
+#############
+## Install ##
+#############
+install(
+  DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
+
+install(
+  TARGETS
+    noether_conversions
+  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)

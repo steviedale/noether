@@ -41,3 +41,18 @@ target_link_libraries(raster_tool_path_planner-test
     ${catkin_LIBRARIES}
     ${VTK_LIBRARIES}
 )
+
+#############
+## Install ##
+#############
+install(
+  DIRECTORY include/${PROJECT_NAME}/
+  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
+
+install(
+  TARGETS 
+    raster_tool_path_planner
+  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
