@@ -108,9 +108,6 @@ POINT_CLOUD_REGISTER_POINT_STRUCT (afront_meshing::AfrontVertexPointType,
                                    (float, max_step_search_radius, max_step_search_radius)
 )
 
-PCL_INSTANTIATE(afront_meshing::AfrontVertexPointType, PCL_XYZ_POINT_TYPES)
-PCL_INSTANTIATE(afront_meshing::AfrontVertexPointType, PCL_NORMAL_POINT_TYPES)
-
 POINT_CLOUD_REGISTER_POINT_STRUCT (afront_meshing::AfrontGuidanceFieldPointType,
                                    (float, x, x)
                                    (float, y, y)
@@ -121,8 +118,5 @@ POINT_CLOUD_REGISTER_POINT_STRUCT (afront_meshing::AfrontGuidanceFieldPointType,
                                    (float, curvature, curvature)
                                    (float, ideal_edge_length, ideal_edge_length)
 )
-
-PCL_INSTANTIATE(afront_meshing::AfrontGuidanceFieldPointType, PCL_XYZ_POINT_TYPES)
-PCL_INSTANTIATE(afront_meshing::AfrontGuidanceFieldPointType, PCL_NORMAL_POINT_TYPES)
 
 #endif // AFRONT_POINT_TYPE_H
