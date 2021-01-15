@@ -317,9 +317,9 @@ ToolPaths splitSegments(ToolPaths tool_paths, double max_segment_length)
     {
       // calculate total segment length
       double total_segment_length = 0.0;
-      for (std::size_t point_i = 0; point_i < seg.size()-1; ++point_i)
+      for (std::size_t point_i = 0; point_i < seg.size() - 1; ++point_i)
       {
-        total_segment_length += getDistance(seg[point_i], seg[point_i+1]);
+        total_segment_length += getDistance(seg[point_i], seg[point_i + 1]);
       }
       int num_cuts = int(ceil(total_segment_length / max_segment_length));
       double segment_length = total_segment_length / num_cuts;
@@ -328,11 +328,11 @@ ToolPaths splitSegments(ToolPaths tool_paths, double max_segment_length)
       for (int cut_i = 0; cut_i < num_cuts; ++cut_i)
       {
         ToolPathSegment new_seg;
-        new_seg.push_back(seg[point_i-1]);
-        while (dist_from_start < segment_length * (cut_i+1) && point_i < seg.size())
+        new_seg.push_back(seg[point_i - 1]);
+        while (dist_from_start < segment_length * (cut_i + 1) && point_i < seg.size())
         {
           new_seg.push_back(seg[point_i]);
-          dist_from_start += getDistance(seg[point_i-1], seg[point_i]);
+          dist_from_start += getDistance(seg[point_i - 1], seg[point_i]);
           point_i += 1;
         }
         new_tool_path.push_back(new_seg);
